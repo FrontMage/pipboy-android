@@ -1,0 +1,18 @@
+# Local/dev
+.DS_Store
+.idea/
+*.iml
+
+# Gradle/build outputs
+.gradle/
+.gradle-local/
+build/
+app/build/
+
+# Machine-local SDK config
+local.properties
+
+# WoW map assets (too large, keep out of git)
+app/src/main/assets/worldmap_atlas/
+app/src/main/assets/worldmap_tiles/
+app/src/main/assets/worldmap_*/

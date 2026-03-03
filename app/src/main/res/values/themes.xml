@@ -1,0 +1,8 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+  <style name="Theme.PipBoy" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <item name="colorPrimary">#39FF8A</item>
+    <item name="colorPrimaryVariant">#1F8C52</item>
+    <item name="colorSecondary">#9DFFBE</item>
+    <item name="android:statusBarColor" tools:targetApi="l">#0A0E0A</item>
+  </style>
+</resources>
