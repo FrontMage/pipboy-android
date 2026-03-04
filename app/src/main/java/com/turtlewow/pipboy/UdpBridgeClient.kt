@@ -30,6 +30,7 @@ class UdpBridgeClient(
   @Volatile private var socketRef: DatagramSocket? = null
   @Volatile private var addressRef: InetAddress? = null
   private val imeSeq = AtomicLong(1L)
+  private val itemUseSeq = AtomicLong(1L)
 
   fun start(scope: CoroutineScope) {
     if (job != null) return
@@ -114,6 +115,45 @@ class UdpBridgeClient(
         sendJson(socket, address, port, payload)
       } catch (t: Throwable) {
         onLog("ime send error: ${t.message}")
+      }
+    }
+  }
+
+  fun sendItemUse(bag: Int, slot: Int, itemId: Int = 0) {
+    if (bag < 0 || slot <= 0) {
+      onLog("item use skipped: invalid bag/slot $bag/$slot")
+      return
+    }
+
+    val scope = ioScope ?: run {
+      onLog("item use skipped: client offline")
+      return
+    }
+    val socket = socketRef ?: run {
+      onLog("item use skipped: socket unavailable")
+      return
+    }
+    val address = addressRef ?: run {
+      onLog("item use skipped: address unavailable")
+      return
+    }
+
+    val seq = itemUseSeq.getAndIncrement()
+    val payload = JSONObject()
+      .put("type", "item_use")
+      .put("proto", 1)
+      .put("client", "pipboy-android")
+      .put("seq", seq)
+      .put("bag", bag)
+      .put("slot", slot)
+      .put("item_id", itemId)
+      .toString()
+
+    scope.launch(Dispatchers.IO) {
+      try {
+        sendJson(socket, address, port, payload)
+      } catch (t: Throwable) {
+        onLog("item use send error: ${t.message}")
       }
     }
   }
@@ -225,6 +265,14 @@ class UdpBridgeClient(
         val seq = obj.optLong("seq", 0L)
         val ok = obj.optInt("ok", 0) != 0
         onAck("ime_ack seq=$seq ok=$ok")
+      }
+
+      "item_use_ack" -> {
+        val seq = obj.optLong("seq", 0L)
+        val ok = obj.optInt("ok", 0) != 0
+        val bag = obj.optInt("bag", -1)
+        val slot = obj.optInt("slot", -1)
+        onAck("item_use_ack seq=$seq ok=$ok bag=$bag slot=$slot")
       }
     }
   }

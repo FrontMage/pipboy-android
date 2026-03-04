@@ -9,11 +9,14 @@ import androidx.recyclerview.widget.RecyclerView
 
 class BagGridAdapter(
   private val onItemTap: (BagItem) -> Unit,
+  private val onItemDoubleTap: (BagItem) -> Unit,
   private val bindIcon: (ImageView, BagItem) -> Unit
 ) : RecyclerView.Adapter<BagGridAdapter.SlotVH>() {
   private val items = ArrayList<BagItem>()
   private var selectedBag = -1
   private var selectedSlot = -1
+  private var lastTapKey: String? = null
+  private var lastTapMs: Long = 0L
 
   fun submitItems(newItems: List<BagItem>) {
     items.clear()
@@ -42,10 +45,19 @@ class BagGridAdapter(
     val selected = item.bag == selectedBag && item.slot == selectedSlot
     holder.bind(item, selected, bindIcon)
     holder.itemView.setOnClickListener {
+      val now = System.currentTimeMillis()
+      val key = "${item.bag}:${item.slot}"
+      val isDoubleTap = lastTapKey == key && (now - lastTapMs) <= 350L
+      lastTapKey = key
+      lastTapMs = now
+
       selectedBag = item.bag
       selectedSlot = item.slot
       notifyDataSetChanged()
       onItemTap(item)
+      if (isDoubleTap) {
+        onItemDoubleTap(item)
+      }
     }
   }
 

@@ -232,6 +232,7 @@ class MainActivity : ComponentActivity() {
     bagFilterOtherBtn.setOnClickListener { setBagFilter(BagFilter.OTHER) }
     bagAdapter = BagGridAdapter(
       onItemTap = { item -> onBagItemTapped(item) },
+      onItemDoubleTap = { item -> onBagItemDoubleTapped(item) },
       bindIcon = { imageView, item -> bindBagSlotIcon(imageView, item) }
     )
     bagGrid.layoutManager = GridLayoutManager(this, 6)
@@ -449,7 +450,7 @@ class MainActivity : ComponentActivity() {
     bagFilterMatBtn.text = t("MAT", "材料")
     bagFilterGearBtn.text = t("GEAR", "装备")
     bagFilterOtherBtn.text = t("OTHER", "其他")
-    bagHintText.text = t("Tap an item to view details", "点物品查看详情")
+    bagHintText.text = t("Tap to view details · Double tap to use", "单击查看详情 · 双击使用")
     imeText.text = t("IME Bridge", "输入法桥接")
     imeInput.hint = t("Type text here...", "在这里输入文本...")
     imeInsertBtn.text = t("Insert", "插入")
@@ -542,6 +543,22 @@ class MainActivity : ComponentActivity() {
     selectedBagItem = item
     bagAdapter.setSelected(item)
     updateBagDetail(item)
+  }
+
+  private fun onBagItemDoubleTapped(item: BagItem) {
+    val c = client
+    if (c == null) {
+      log(t("item use skipped: not connected", "使用物品失败: 未连接"))
+      return
+    }
+    c.sendItemUse(item.bag, item.slot, item.itemId)
+    log(
+      if (uiLang == UiLang.ZH) {
+        "请求使用物品: bag=${item.bag} slot=${item.slot} id=${item.itemId}"
+      } else {
+        "item use requested: bag=${item.bag} slot=${item.slot} id=${item.itemId}"
+      }
+    )
   }
 
   private fun updateBagPanel(packet: BagPacket?) {
