@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.inputmethod.InputMethodManager
@@ -16,10 +17,14 @@ import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import coil.load
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Collections
 import java.util.Locale
 import kotlin.math.ceil
 
@@ -33,6 +38,11 @@ class MainActivity : ComponentActivity() {
     val files: Set<String>,
     val rootsBySlug: Map<String, String>,
     val baseRoot: String?
+  )
+
+  data class RemoteMapIndex(
+    val tileDirs: List<String>,
+    val iconsAvailable: Boolean
   )
 
   companion object {
@@ -104,21 +114,30 @@ class MainActivity : ComponentActivity() {
   private var lastPosLogMs: Long = 0L
   private var currentHost: String = ""
   private var currentPort: Int = 38442
+  private var currentAssetPort: Int = AssetBridgeClient.DEFAULT_PORT
+  private var remoteAssetsAvailable = false
+  private var remoteIconsAvailable = false
   private var uiLang: UiLang = UiLang.EN
   private var currentPage: Page = Page.MAP
   private var currentBagFilter: BagFilter = BagFilter.ALL
   private var currentBagItems: List<BagItem> = emptyList()
   private var selectedBagItem: BagItem? = null
   private var lastImeFocus = false
-  private val bagAdapter = BagGridAdapter { item -> onBagItemTapped(item) }
+  private lateinit var bagAdapter: BagGridAdapter
 
-  // slug(zone) -> asset path, e.g. worldmap_atlas/Elwynn_atlas_rowmajor.png
-  private val atlasIndex = LinkedHashMap<String, String>()
   // slug(zone) -> tile dir name, e.g. ELWYNN -> Elwynn
   private val tileZoneIndex = LinkedHashMap<String, String>()
   private val zoneCatalogCache = LinkedHashMap<String, ZoneTileCatalog>()
+  private val zoneCatalogFilesRemote = LinkedHashMap<String, Set<String>>()
   private val bitmapCache = LinkedHashMap<String, Bitmap>(128, 0.75f, true)
   private val composedCache = LinkedHashMap<String, Bitmap>(12, 0.75f, true)
+  private val mapSourceLogged = LinkedHashSet<String>()
+  private val pendingAssetFetch = Collections.synchronizedSet(mutableSetOf<String>())
+  private val pendingZoneListFetch = Collections.synchronizedSet(mutableSetOf<String>())
+  private val pendingBagIconFetch = Collections.synchronizedSet(mutableSetOf<String>())
+  private val bagIconBitmapCache = LinkedHashMap<String, Bitmap>(256, 0.75f, true)
+  private val assetCacheDir by lazy { File(cacheDir, "map_assets") }
+  private val bagIconCacheDir by lazy { File(cacheDir, "bag_icons") }
 
   private val prefs by lazy { getSharedPreferences("pipboy", MODE_PRIVATE) }
 
@@ -211,12 +230,18 @@ class MainActivity : ComponentActivity() {
     bagFilterMatBtn.setOnClickListener { setBagFilter(BagFilter.MAT) }
     bagFilterGearBtn.setOnClickListener { setBagFilter(BagFilter.GEAR) }
     bagFilterOtherBtn.setOnClickListener { setBagFilter(BagFilter.OTHER) }
+    bagAdapter = BagGridAdapter(
+      onItemTap = { item -> onBagItemTapped(item) },
+      bindIcon = { imageView, item -> bindBagSlotIcon(imageView, item) }
+    )
     bagGrid.layoutManager = GridLayoutManager(this, 6)
     bagGrid.adapter = bagAdapter
     updateBagFilterButtons()
-
-    rebuildAtlasIndexFromAssets()
-    rebuildTileIndexFromAssets()
+    assetCacheDir.mkdirs()
+    bagIconCacheDir.mkdirs()
+    tileZoneIndex.clear()
+    zoneCatalogCache.clear()
+    zoneCatalogFilesRemote.clear()
     applyLanguage()
     switchPage(currentPage)
     log("ready")
@@ -227,6 +252,7 @@ class MainActivity : ComponentActivity() {
     disconnect()
     bitmapCache.clear()
     composedCache.clear()
+    bagIconBitmapCache.clear()
   }
 
   private fun connect() {
@@ -234,6 +260,9 @@ class MainActivity : ComponentActivity() {
     val port = portInput.text.toString().trim().toIntOrNull() ?: 38442
     currentHost = ip
     currentPort = port
+    currentAssetPort = AssetBridgeClient.DEFAULT_PORT
+    remoteAssetsAvailable = false
+    remoteIconsAvailable = false
 
     prefs.edit()
       .putString("ip", ip)
@@ -257,6 +286,7 @@ class MainActivity : ComponentActivity() {
     statusText.text = t("Map: waiting data", "地图: 等待数据")
     connStateText.text = statusConnectedText(ip, port)
     switchPage(Page.MAP)
+    refreshRemoteMapIndex()
     Log.i(logTag, "connect host=$ip port=$port")
   }
 
@@ -273,6 +303,15 @@ class MainActivity : ComponentActivity() {
     lastPos = null
     lastOverlay = null
     lastBag = null
+    remoteAssetsAvailable = false
+    remoteIconsAvailable = false
+    zoneCatalogFilesRemote.clear()
+    zoneCatalogCache.clear()
+    mapSourceLogged.clear()
+    pendingAssetFetch.clear()
+    pendingZoneListFetch.clear()
+    pendingBagIconFetch.clear()
+    bagIconBitmapCache.clear()
     currentBagItems = emptyList()
     selectedBagItem = null
     connectBtn.text = t("Connect", "连接")
@@ -657,11 +696,11 @@ class MainActivity : ComponentActivity() {
     bagDetailId.text = if (uiLang == UiLang.ZH) "物品ID: ${item.itemId}" else "Item ID: ${item.itemId}"
     bagDetailPriceUnit.text = if (uiLang == UiLang.ZH) "单价: ${formatCoin(unitCopper)}" else "Unit: ${formatCoin(unitCopper)}"
     bagDetailPriceStack.text = if (uiLang == UiLang.ZH) "总价: ${formatCoin(stackCopper)}" else "Stack: ${formatCoin(stackCopper)}"
-
-    bagDetailIcon.load(buildBagIconUrl(item.iconTex)) {
-      placeholder(R.drawable.bag_slot_placeholder)
-      error(R.drawable.bag_slot_placeholder)
-      crossfade(true)
+    val iconBmp = loadBagIconBitmap(item.iconTex)
+    if (iconBmp != null && !iconBmp.isRecycled) {
+      bagDetailIcon.setImageBitmap(iconBmp)
+    } else {
+      bagDetailIcon.setImageResource(R.drawable.bag_slot_placeholder)
     }
   }
 
@@ -718,15 +757,94 @@ class MainActivity : ComponentActivity() {
     return if (n.isEmpty()) null else n
   }
 
-  private fun buildBagIconUrl(iconTex: String?): String? {
+  private fun bindBagSlotIcon(imageView: ImageView, item: BagItem) {
+    val bmp = loadBagIconBitmap(item.iconTex)
+    if (bmp != null && !bmp.isRecycled) {
+      imageView.setImageBitmap(bmp)
+    } else {
+      imageView.setImageResource(R.drawable.bag_slot_placeholder)
+    }
+  }
+
+  private fun normalizeIconStem(iconTex: String?): String? {
     if (iconTex.isNullOrBlank()) return null
-    val iconName = iconTex
+    val raw = iconTex
       .substringAfterLast('\\')
       .substringAfterLast('/')
       .trim()
-      .lowercase(Locale.US)
-    if (iconName.isBlank()) return null
-    return "https://render.worldofwarcraft.com/us/icons/56/$iconName.jpg"
+    if (raw.isBlank()) return null
+    val stem = raw.substringBeforeLast('.', raw)
+    if (stem.isBlank()) return null
+    return stem
+  }
+
+  private fun loadBagIconBitmap(iconTex: String?): Bitmap? {
+    val stem = normalizeIconStem(iconTex) ?: return null
+    val key = "icons/$stem.png"
+
+    val cached = bagIconBitmapCache[key]
+    if (cached != null && !cached.isRecycled) {
+      return cached
+    }
+
+    val cacheFile = File(bagIconCacheDir, "$stem.png")
+    val fromDisk = if (cacheFile.exists()) {
+      runCatching { BitmapFactory.decodeFile(cacheFile.absolutePath) }.getOrNull()
+    } else null
+    if (fromDisk != null) {
+      bagIconBitmapCache[key] = fromDisk
+      trimBagIconCache()
+      return fromDisk
+    }
+
+    scheduleBagIconFetch(stem)
+    return null
+  }
+
+  private fun scheduleBagIconFetch(stem: String) {
+    if (!pendingBagIconFetch.add(stem)) return
+    if (!connected || currentHost.isBlank() || !remoteIconsAvailable) {
+      pendingBagIconFetch.remove(stem)
+      return
+    }
+
+    lifecycleScope.launch(Dispatchers.IO) {
+      val bytes = AssetBridgeClient.requestFile(
+        host = currentHost,
+        root = "icons",
+        path = "$stem.png",
+        port = currentAssetPort
+      )
+      var ok = false
+      if (bytes != null && bytes.isNotEmpty()) {
+        val cacheFile = File(bagIconCacheDir, "$stem.png")
+        ok = runCatching {
+          cacheFile.parentFile?.mkdirs()
+          cacheFile.writeBytes(bytes)
+          true
+        }.getOrDefault(false)
+      }
+
+      withContext(Dispatchers.Main) {
+        pendingBagIconFetch.remove(stem)
+        if (ok) {
+          val p = lastBag
+          if (p != null) {
+            updateBagPanel(p)
+          }
+          if (selectedBagItem != null) {
+            updateBagDetail(selectedBagItem)
+          }
+        }
+      }
+    }
+  }
+
+  private fun trimBagIconCache(maxEntries: Int = 256) {
+    while (bagIconBitmapCache.size > maxEntries) {
+      val first = bagIconBitmapCache.entries.firstOrNull() ?: break
+      bagIconBitmapCache.remove(first.key)
+    }
   }
 
   private fun ensureMapLoaded(map: String, zone: String) {
@@ -749,18 +867,6 @@ class MainActivity : ComponentActivity() {
         return
       }
     }
-
-    for (k in keyCandidates) {
-      val assetPath = atlasIndex[k] ?: continue
-      val bmp = loadBitmapCached(assetPath) ?: continue
-      mapView.setMap(bmp, "${map.ifBlank { zone }} (${overlayLabel(assetPath)})")
-      return
-    }
-  }
-
-  private fun overlayLabel(assetPath: String): String {
-    val fileName = assetPath.substringAfterLast('/')
-    return fileName.removeSuffix("_atlas_rowmajor.png")
   }
 
   private fun overlayMatchesCurrentMap(overlay: OverlayPacket, keyCandidates: List<String>): Boolean {
@@ -784,25 +890,77 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  private fun rebuildTileIndexFromAssets() {
-    tileZoneIndex.clear()
-    zoneCatalogCache.clear()
-    val base = "worldmap_tiles"
-    val zoneDirs = assets.list(base) ?: emptyArray()
-    for (dir in zoneDirs) {
-      val files = assets.list("$base/$dir") ?: continue
-      if (files.none { it.endsWith(".png", ignoreCase = true) }) continue
-      tileZoneIndex[slug(dir)] = dir
+  private fun refreshRemoteMapIndex() {
+    val host = currentHost
+    val port = currentAssetPort
+    if (host.isBlank() || !connected) return
+
+    lifecycleScope.launch {
+      var remoteIndex: RemoteMapIndex? = null
+      for (attempt in 1..8) {
+        if (!connected || host != currentHost) return@launch
+        remoteIndex = withContext(Dispatchers.IO) {
+          fetchRemoteMapIndex(host, port)
+        }
+        if (remoteIndex != null) break
+        remoteAssetsAvailable = false
+        remoteIconsAvailable = false
+        Log.w(logTag, "asset tcp unavailable host=$host port=$port attempt=$attempt")
+        delay(1200)
+      }
+      if (!connected || host != currentHost) return@launch
+      if (remoteIndex == null) {
+        log("asset tcp unavailable: $host:$port")
+        return@launch
+      }
+      applyRemoteMapIndex(remoteIndex)
+      Log.i(logTag, "asset tcp indexed tiles=${remoteIndex.tileDirs.size}")
     }
-    log("tile zones indexed from assets: ${tileZoneIndex.size}")
+  }
+
+  private fun fetchRemoteMapIndex(host: String, port: Int): RemoteMapIndex? {
+    val manifest = AssetBridgeClient.requestManifest(host, port) ?: return null
+    val tileAvailable = manifest.roots["worldmap_tiles"] == true
+    val iconsAvailable = manifest.roots["icons"] == true
+    if (!tileAvailable) return null
+
+    val tileDirs = if (tileAvailable) {
+      AssetBridgeClient.requestList(host, root = "worldmap_tiles", path = "", port = port)
+        ?.map { it.removeSuffix("/") }
+        ?.filter { it.isNotBlank() }
+        ?.distinct()
+        ?.sorted()
+        ?: emptyList()
+    } else {
+      emptyList()
+    }
+
+    return RemoteMapIndex(tileDirs = tileDirs, iconsAvailable = iconsAvailable)
+  }
+
+  private fun applyRemoteMapIndex(index: RemoteMapIndex) {
+    var addedTiles = 0
+    for (dir in index.tileDirs) {
+      if (dir.isBlank()) continue
+      val key = slug(dir)
+      if (key.isBlank()) continue
+      if (!tileZoneIndex.containsKey(key)) {
+        tileZoneIndex[key] = dir
+        addedTiles++
+      }
+    }
+    remoteAssetsAvailable = index.tileDirs.isNotEmpty()
+    remoteIconsAvailable = index.iconsAvailable
+    if (remoteAssetsAvailable) {
+      log("asset tcp indexed: +$addedTiles tiles")
+    }
   }
 
   private fun getZoneCatalog(dirName: String): ZoneTileCatalog? {
     val cached = zoneCatalogCache[dirName]
     if (cached != null) return cached
 
-    val names = assets.list("worldmap_tiles/$dirName") ?: return null
-    val pngFiles = names.filter { it.endsWith(".png", ignoreCase = true) }.toSet()
+    val pngFiles = getZonePngFiles(dirName)
     if (pngFiles.isEmpty()) return null
 
     val rootsBySlug = LinkedHashMap<String, String>()
@@ -833,6 +991,65 @@ class MainActivity : ComponentActivity() {
     )
     zoneCatalogCache[dirName] = catalog
     return catalog
+  }
+
+  private fun getZonePngFiles(dirName: String): Set<String> {
+    val remoteCached = zoneCatalogFilesRemote[dirName]
+    if (remoteCached != null) return remoteCached
+    if (!connected || !remoteAssetsAvailable || currentHost.isBlank()) return emptySet()
+
+    if (Looper.myLooper() == Looper.getMainLooper()) {
+      scheduleZoneListFetch(dirName)
+      return emptySet()
+    }
+
+    val entries = AssetBridgeClient.requestList(
+      host = currentHost,
+      root = "worldmap_tiles",
+      path = dirName,
+      port = currentAssetPort
+    ) ?: return emptySet()
+    val remoteFiles = entries
+      .filter { !it.endsWith("/") && it.endsWith(".png", ignoreCase = true) }
+      .toSet()
+    if (remoteFiles.isNotEmpty()) {
+      zoneCatalogFilesRemote[dirName] = remoteFiles
+    }
+    return remoteFiles
+  }
+
+  private fun scheduleZoneListFetch(dirName: String) {
+    if (!pendingZoneListFetch.add(dirName)) return
+    if (!connected || !remoteAssetsAvailable || currentHost.isBlank()) {
+      pendingZoneListFetch.remove(dirName)
+      return
+    }
+
+    lifecycleScope.launch(Dispatchers.IO) {
+      val entries = AssetBridgeClient.requestList(
+        host = currentHost,
+        root = "worldmap_tiles",
+        path = dirName,
+        port = currentAssetPort
+      )
+      val remoteFiles = entries
+        ?.filter { !it.endsWith("/") && it.endsWith(".png", ignoreCase = true) }
+        ?.toSet()
+        ?: emptySet()
+
+      withContext(Dispatchers.Main) {
+        pendingZoneListFetch.remove(dirName)
+        if (!connected || currentHost.isBlank()) return@withContext
+        if (remoteFiles.isNotEmpty()) {
+          zoneCatalogFilesRemote[dirName] = remoteFiles
+          zoneCatalogCache.remove(dirName)
+          val p = lastPos
+          if (p != null) {
+            ensureMapLoaded(p.map, p.zone)
+          }
+        }
+      }
+    }
   }
 
   private fun composeMapWithTiles(dirName: String, overlay: OverlayPacket?): Bitmap? {
@@ -920,40 +1137,102 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  private fun rebuildAtlasIndexFromAssets() {
-    atlasIndex.clear()
-    val base = "worldmap_atlas"
-    val names = assets.list(base) ?: emptyArray()
-    for (name in names) {
-      if (!name.endsWith("_atlas_rowmajor.png")) continue
-      val zoneName = name.removeSuffix("_atlas_rowmajor.png")
-      atlasIndex[slug(zoneName)] = "$base/$name"
-    }
-    log("atlas indexed from assets: ${atlasIndex.size} zones")
-  }
-
   private fun loadBitmapCached(assetPath: String): Bitmap? {
     val cached = bitmapCache[assetPath]
     if (cached != null && !cached.isRecycled) {
+      logMapSource(assetPath, "memory_cache")
       return cached
     }
 
-    val bmp = try {
-      assets.open(assetPath).use { input ->
-        BitmapFactory.decodeStream(input)
-      }
-    } catch (_: Throwable) {
+    val cacheFile = File(assetCacheDir, assetPath.replace('/', File.separatorChar))
+    val bmpFromDisk = if (cacheFile.exists()) {
+      runCatching { BitmapFactory.decodeFile(cacheFile.absolutePath) }.getOrNull()
+    } else {
       null
-    } ?: return null
-
-    bitmapCache[assetPath] = bmp
-
-    // trim cache size
-    while (bitmapCache.size > 160) {
-      val first = bitmapCache.entries.firstOrNull() ?: break
-      bitmapCache.remove(first.key)
     }
-    return bmp
+    if (bmpFromDisk != null) {
+      bitmapCache[assetPath] = bmpFromDisk
+      logMapSource(assetPath, "disk_cache")
+      return bmpFromDisk
+    }
+
+    if (connected && remoteAssetsAvailable && currentHost.isNotBlank()) {
+      if (Looper.myLooper() == Looper.getMainLooper()) {
+        scheduleAssetFetch(assetPath)
+        logMapSource(assetPath, "tcp_pending")
+      } else {
+        val bytes = fetchAssetBytes(assetPath)
+        if (bytes != null && bytes.isNotEmpty()) {
+          runCatching {
+            cacheFile.parentFile?.mkdirs()
+            cacheFile.writeBytes(bytes)
+          }
+          val netBmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+          if (netBmp != null) {
+            bitmapCache[assetPath] = netBmp
+            logMapSource(assetPath, "tcp")
+            return netBmp
+          }
+        }
+      }
+    }
+
+    logMapSource(assetPath, "tcp_miss")
+    return null
+  }
+
+  private fun scheduleAssetFetch(assetPath: String) {
+    if (!pendingAssetFetch.add(assetPath)) return
+    if (!connected || !remoteAssetsAvailable || currentHost.isBlank()) {
+      pendingAssetFetch.remove(assetPath)
+      return
+    }
+
+    lifecycleScope.launch(Dispatchers.IO) {
+      val bytes = fetchAssetBytes(assetPath)
+      var ok = false
+      if (bytes != null && bytes.isNotEmpty()) {
+        val cacheFile = File(assetCacheDir, assetPath.replace('/', File.separatorChar))
+        ok = runCatching {
+          cacheFile.parentFile?.mkdirs()
+          cacheFile.writeBytes(bytes)
+          true
+        }.getOrDefault(false)
+      }
+      withContext(Dispatchers.Main) {
+        pendingAssetFetch.remove(assetPath)
+        if (ok) {
+          logMapSource(assetPath, "tcp")
+          val p = lastPos
+          if (p != null) {
+            ensureMapLoaded(p.map, p.zone)
+          }
+        }
+      }
+    }
+  }
+
+  private fun fetchAssetBytes(assetPath: String): ByteArray? {
+    val root = assetPath.substringBefore('/', "")
+    val rel = assetPath.substringAfter('/', "")
+    if (root.isBlank() || rel.isBlank()) return null
+    return AssetBridgeClient.requestFile(
+      host = currentHost,
+      root = root,
+      path = rel,
+      port = currentAssetPort
+    )
+  }
+
+  private fun logMapSource(assetPath: String, source: String) {
+    if (!isMapAssetPath(assetPath)) return
+    val key = "$source|$assetPath"
+    if (!mapSourceLogged.add(key)) return
+    Log.i(logTag, "map_source source=$source path=$assetPath")
+  }
+
+  private fun isMapAssetPath(assetPath: String): Boolean {
+    return assetPath.startsWith("worldmap_", ignoreCase = true)
   }
 
   private fun slug(s: String): String {

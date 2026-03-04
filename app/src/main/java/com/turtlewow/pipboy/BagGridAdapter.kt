@@ -6,11 +6,10 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
-import coil.load
-import java.util.Locale
 
 class BagGridAdapter(
-  private val onItemTap: (BagItem) -> Unit
+  private val onItemTap: (BagItem) -> Unit,
+  private val bindIcon: (ImageView, BagItem) -> Unit
 ) : RecyclerView.Adapter<BagGridAdapter.SlotVH>() {
   private val items = ArrayList<BagItem>()
   private var selectedBag = -1
@@ -41,7 +40,7 @@ class BagGridAdapter(
   override fun onBindViewHolder(holder: SlotVH, position: Int) {
     val item = items[position]
     val selected = item.bag == selectedBag && item.slot == selectedSlot
-    holder.bind(item, selected)
+    holder.bind(item, selected, bindIcon)
     holder.itemView.setOnClickListener {
       selectedBag = item.bag
       selectedSlot = item.slot
@@ -56,7 +55,7 @@ class BagGridAdapter(
     private val icon: ImageView = itemView.findViewById(R.id.slotIcon)
     private val countText: TextView = itemView.findViewById(R.id.slotCount)
 
-    fun bind(item: BagItem, selected: Boolean) {
+    fun bind(item: BagItem, selected: Boolean, bindIcon: (ImageView, BagItem) -> Unit) {
       itemView.isSelected = selected
       if (item.count > 1) {
         countText.visibility = View.VISIBLE
@@ -64,24 +63,7 @@ class BagGridAdapter(
       } else {
         countText.visibility = View.GONE
       }
-
-      val url = buildIconUrl(item.iconTex)
-      icon.load(url) {
-        placeholder(R.drawable.bag_slot_placeholder)
-        error(R.drawable.bag_slot_placeholder)
-        crossfade(true)
-      }
+      bindIcon(icon, item)
     }
   }
-}
-
-private fun buildIconUrl(iconTex: String?): String? {
-  if (iconTex.isNullOrBlank()) return null
-  val iconName = iconTex
-    .substringAfterLast('\\')
-    .substringAfterLast('/')
-    .trim()
-    .lowercase(Locale.US)
-  if (iconName.isBlank()) return null
-  return "https://render.worldofwarcraft.com/us/icons/56/$iconName.jpg"
 }
