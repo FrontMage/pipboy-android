@@ -1,0 +1,87 @@
+package com.turtlewow.pipboy
+
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ImageView
+import android.widget.TextView
+import androidx.recyclerview.widget.RecyclerView
+import coil.load
+import java.util.Locale
+
+class BagGridAdapter(
+  private val onItemTap: (BagItem) -> Unit
+) : RecyclerView.Adapter<BagGridAdapter.SlotVH>() {
+  private val items = ArrayList<BagItem>()
+  private var selectedBag = -1
+  private var selectedSlot = -1
+
+  fun submitItems(newItems: List<BagItem>) {
+    items.clear()
+    items.addAll(newItems)
+    notifyDataSetChanged()
+  }
+
+  fun setSelected(item: BagItem?) {
+    if (item == null) {
+      selectedBag = -1
+      selectedSlot = -1
+    } else {
+      selectedBag = item.bag
+      selectedSlot = item.slot
+    }
+    notifyDataSetChanged()
+  }
+
+  override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): SlotVH {
+    val view = LayoutInflater.from(parent.context).inflate(R.layout.item_bag_slot, parent, false)
+    return SlotVH(view)
+  }
+
+  override fun onBindViewHolder(holder: SlotVH, position: Int) {
+    val item = items[position]
+    val selected = item.bag == selectedBag && item.slot == selectedSlot
+    holder.bind(item, selected)
+    holder.itemView.setOnClickListener {
+      selectedBag = item.bag
+      selectedSlot = item.slot
+      notifyDataSetChanged()
+      onItemTap(item)
+    }
+  }
+
+  override fun getItemCount(): Int = items.size
+
+  class SlotVH(itemView: View) : RecyclerView.ViewHolder(itemView) {
+    private val icon: ImageView = itemView.findViewById(R.id.slotIcon)
+    private val countText: TextView = itemView.findViewById(R.id.slotCount)
+
+    fun bind(item: BagItem, selected: Boolean) {
+      itemView.isSelected = selected
+      if (item.count > 1) {
+        countText.visibility = View.VISIBLE
+        countText.text = item.count.toString()
+      } else {
+        countText.visibility = View.GONE
+      }
+
+      val url = buildIconUrl(item.iconTex)
+      icon.load(url) {
+        placeholder(R.drawable.bag_slot_placeholder)
+        error(R.drawable.bag_slot_placeholder)
+        crossfade(true)
+      }
+    }
+  }
+}
+
+private fun buildIconUrl(iconTex: String?): String? {
+  if (iconTex.isNullOrBlank()) return null
+  val iconName = iconTex
+    .substringAfterLast('\\')
+    .substringAfterLast('/')
+    .trim()
+    .lowercase(Locale.US)
+  if (iconName.isBlank()) return null
+  return "https://render.worldofwarcraft.com/us/icons/56/$iconName.jpg"
+}

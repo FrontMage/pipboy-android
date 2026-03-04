@@ -32,3 +32,26 @@ data class OverlayPacket(
   val count: Int,
   val overlays: List<OverlayRect>
 )
+
+data class BagItem(
+  val bag: Int,
+  val slot: Int,
+  val itemId: Int,
+  val count: Int,
+  val iconTex: String?,
+  val link: String?,
+  val name: String?,
+  val quality: Int,
+  val itemClass: String?,
+  val itemSubClass: String?,
+  val equipLoc: String?,
+  val sellPrice: Int
+)
+
+data class BagPacket(
+  val ts: Long,
+  val rev: Int,
+  val bankKnown: Boolean,
+  val itemCount: Int,
+  val items: List<BagItem>
+)

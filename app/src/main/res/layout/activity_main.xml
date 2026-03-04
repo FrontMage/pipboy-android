@@ -282,12 +282,224 @@
         android:visibility="gone">
 
         <TextView
-          android:id="@+id/bagText"
+          android:id="@+id/bagSummaryText"
           android:layout_width="match_parent"
           android:layout_height="wrap_content"
-          android:text="Bag page (placeholder)"
+          android:text="Bag: waiting data"
           android:textColor="#E8D6B4"
-          android:textSize="16sp" />
+          android:textStyle="bold"
+          android:textSize="14sp" />
+
+        <LinearLayout
+          android:id="@+id/bagFilterRow"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginTop="8dp"
+          android:orientation="horizontal">
+
+          <Button
+            android:id="@+id/bagFilterAllBtn"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_weight="1"
+            android:background="@drawable/nav_item_bg"
+            android:backgroundTint="@null"
+            android:text="ALL"
+            android:textAllCaps="false"
+            android:textColor="@color/nav_item_text"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+          <Button
+            android:id="@+id/bagFilterUseBtn"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/nav_item_bg"
+            android:backgroundTint="@null"
+            android:text="USE"
+            android:textAllCaps="false"
+            android:textColor="@color/nav_item_text"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+          <Button
+            android:id="@+id/bagFilterMatBtn"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/nav_item_bg"
+            android:backgroundTint="@null"
+            android:text="MAT"
+            android:textAllCaps="false"
+            android:textColor="@color/nav_item_text"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+          <Button
+            android:id="@+id/bagFilterGearBtn"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/nav_item_bg"
+            android:backgroundTint="@null"
+            android:text="GEAR"
+            android:textAllCaps="false"
+            android:textColor="@color/nav_item_text"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+          <Button
+            android:id="@+id/bagFilterOtherBtn"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/nav_item_bg"
+            android:backgroundTint="@null"
+            android:text="OTHER"
+            android:textAllCaps="false"
+            android:textColor="@color/nav_item_text"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+          android:layout_width="match_parent"
+          android:layout_height="0dp"
+          android:layout_weight="1"
+          android:layout_marginTop="8dp"
+          android:orientation="horizontal">
+
+          <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/bagGrid"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="6"
+            android:clipToPadding="false"
+            android:paddingBottom="8dp"
+            android:scrollbars="vertical"
+            android:background="#15100D" />
+
+          <ScrollView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="2"
+            android:layout_marginStart="8dp"
+            android:background="#2C2119"
+            android:fillViewport="true"
+            android:scrollbars="vertical">
+
+            <LinearLayout
+              android:id="@+id/bagDetailPanel"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:orientation="vertical"
+              android:padding="6dp">
+
+              <com.turtlewow.pipboy.SquareFrameLayout
+                android:layout_width="88dp"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:background="#1A130E"
+                android:padding="3dp">
+
+                <ImageView
+                  android:id="@+id/bagDetailIcon"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:contentDescription="@null"
+                  android:scaleType="centerCrop" />
+              </com.turtlewow.pipboy.SquareFrameLayout>
+
+              <TextView
+                android:id="@+id/bagDetailName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:maxLines="2"
+                android:text="-"
+                android:textColor="#F4E6C8"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+              <TextView
+                android:id="@+id/bagDetailType"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="-"
+                android:textColor="#D7BD8C"
+                android:textSize="11sp" />
+
+              <TextView
+                android:id="@+id/bagDetailClass"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="-"
+                android:textColor="#D7BD8C"
+                android:textSize="11sp" />
+
+              <TextView
+                android:id="@+id/bagDetailPriceUnit"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="-"
+                android:textColor="#D7BD8C"
+                android:textSize="11sp" />
+
+              <TextView
+                android:id="@+id/bagDetailPriceStack"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="-"
+                android:textColor="#D7BD8C"
+                android:textSize="11sp" />
+
+              <TextView
+                android:id="@+id/bagDetailCount"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="-"
+                android:textColor="#D7BD8C"
+                android:textSize="11sp" />
+
+              <TextView
+                android:id="@+id/bagDetailPos"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="-"
+                android:textColor="#D7BD8C"
+                android:textSize="11sp" />
+
+              <TextView
+                android:id="@+id/bagDetailId"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="-"
+                android:textColor="#D7BD8C"
+                android:textSize="11sp" />
+            </LinearLayout>
+          </ScrollView>
+        </LinearLayout>
+
+        <TextView
+          android:id="@+id/bagHintText"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginTop="6dp"
+          android:text="Tap item to view details"
+          android:textColor="#A88F69"
+          android:textSize="11sp" />
       </LinearLayout>
 
       <LinearLayout

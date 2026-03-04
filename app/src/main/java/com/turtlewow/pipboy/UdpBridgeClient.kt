@@ -21,6 +21,7 @@ class UdpBridgeClient(
   private val port: Int,
   private val onPos: (PosPacket) -> Unit,
   private val onOverlay: (OverlayPacket) -> Unit,
+  private val onBag: (BagPacket) -> Unit,
   private val onAck: (String) -> Unit,
   private val onLog: (String) -> Unit
 ) {
@@ -47,7 +48,7 @@ class UdpBridgeClient(
         while (isActive) {
           val now = System.currentTimeMillis()
           if (now - lastHelloMs >= 2000L) {
-            sendJson(socket, address, port, "{\"type\":\"hello\",\"proto\":1,\"client\":\"pipboy-android\",\"want\":\"pos,overlay\"}")
+            sendJson(socket, address, port, "{\"type\":\"hello\",\"proto\":1,\"client\":\"pipboy-android\",\"want\":\"pos,overlay,bag\"}")
             lastHelloMs = now
           }
 
@@ -183,6 +184,39 @@ class UdpBridgeClient(
             zone = obj.optString("zone", ""),
             count = obj.optInt("count", overlays.size),
             overlays = overlays
+          )
+        )
+      }
+
+      "bag_sync" -> {
+        val arr = obj.optJSONArray("items") ?: JSONArray()
+        val items = ArrayList<BagItem>(arr.length())
+        for (i in 0 until arr.length()) {
+          val it = arr.optJSONObject(i) ?: continue
+          items.add(
+            BagItem(
+              bag = it.optInt("bag", 0),
+              slot = it.optInt("slot", 0),
+              itemId = it.optInt("item_id", 0),
+              count = it.optInt("count", 0),
+              iconTex = it.optString("icon_tex", "").ifBlank { null },
+              link = it.optString("link", "").ifBlank { null },
+              name = it.optString("name", "").ifBlank { null },
+              quality = it.optInt("quality", 0),
+              itemClass = it.optString("item_class", "").ifBlank { null },
+              itemSubClass = it.optString("item_subclass", "").ifBlank { null },
+              equipLoc = it.optString("equip_loc", "").ifBlank { null },
+              sellPrice = it.optInt("sell_price", 0)
+            )
+          )
+        }
+        onBag(
+          BagPacket(
+            ts = obj.optLong("ts", 0L),
+            rev = obj.optInt("rev", 0),
+            bankKnown = obj.optInt("bank_known", 0) != 0 || obj.optBoolean("bank_known", false),
+            itemCount = obj.optInt("item_count", items.size),
+            items = items
           )
         )
       }

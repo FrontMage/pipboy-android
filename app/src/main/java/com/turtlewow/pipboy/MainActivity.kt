@@ -10,9 +10,13 @@ import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import coil.load
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -22,6 +26,7 @@ import kotlin.math.ceil
 class MainActivity : ComponentActivity() {
   enum class UiLang { EN, ZH }
   enum class Page { MAP, BAG, IME, DEBUG, CONFIG }
+  enum class BagFilter { ALL, USE, MAT, GEAR, OTHER }
 
   data class ZoneTileCatalog(
     val dirName: String,
@@ -58,7 +63,23 @@ class MainActivity : ComponentActivity() {
   private lateinit var pageIme: View
   private lateinit var pageDebug: View
   private lateinit var pageConfig: View
-  private lateinit var bagText: TextView
+  private lateinit var bagFilterAllBtn: Button
+  private lateinit var bagFilterUseBtn: Button
+  private lateinit var bagFilterMatBtn: Button
+  private lateinit var bagFilterGearBtn: Button
+  private lateinit var bagFilterOtherBtn: Button
+  private lateinit var bagSummaryText: TextView
+  private lateinit var bagHintText: TextView
+  private lateinit var bagGrid: RecyclerView
+  private lateinit var bagDetailIcon: ImageView
+  private lateinit var bagDetailName: TextView
+  private lateinit var bagDetailType: TextView
+  private lateinit var bagDetailClass: TextView
+  private lateinit var bagDetailCount: TextView
+  private lateinit var bagDetailPos: TextView
+  private lateinit var bagDetailId: TextView
+  private lateinit var bagDetailPriceUnit: TextView
+  private lateinit var bagDetailPriceStack: TextView
   private lateinit var imeText: TextView
   private lateinit var imeInput: EditText
   private lateinit var imeInsertBtn: Button
@@ -79,12 +100,17 @@ class MainActivity : ComponentActivity() {
   private var connected = false
   private var lastPos: PosPacket? = null
   private var lastOverlay: OverlayPacket? = null
+  private var lastBag: BagPacket? = null
   private var lastPosLogMs: Long = 0L
   private var currentHost: String = ""
   private var currentPort: Int = 38442
   private var uiLang: UiLang = UiLang.EN
   private var currentPage: Page = Page.MAP
+  private var currentBagFilter: BagFilter = BagFilter.ALL
+  private var currentBagItems: List<BagItem> = emptyList()
+  private var selectedBagItem: BagItem? = null
   private var lastImeFocus = false
+  private val bagAdapter = BagGridAdapter { item -> onBagItemTapped(item) }
 
   // slug(zone) -> asset path, e.g. worldmap_atlas/Elwynn_atlas_rowmajor.png
   private val atlasIndex = LinkedHashMap<String, String>()
@@ -113,7 +139,23 @@ class MainActivity : ComponentActivity() {
     pageIme = findViewById(R.id.pageIme)
     pageDebug = findViewById(R.id.pageDebug)
     pageConfig = findViewById(R.id.pageConfig)
-    bagText = findViewById(R.id.bagText)
+    bagFilterAllBtn = findViewById(R.id.bagFilterAllBtn)
+    bagFilterUseBtn = findViewById(R.id.bagFilterUseBtn)
+    bagFilterMatBtn = findViewById(R.id.bagFilterMatBtn)
+    bagFilterGearBtn = findViewById(R.id.bagFilterGearBtn)
+    bagFilterOtherBtn = findViewById(R.id.bagFilterOtherBtn)
+    bagSummaryText = findViewById(R.id.bagSummaryText)
+    bagHintText = findViewById(R.id.bagHintText)
+    bagGrid = findViewById(R.id.bagGrid)
+    bagDetailIcon = findViewById(R.id.bagDetailIcon)
+    bagDetailName = findViewById(R.id.bagDetailName)
+    bagDetailType = findViewById(R.id.bagDetailType)
+    bagDetailClass = findViewById(R.id.bagDetailClass)
+    bagDetailCount = findViewById(R.id.bagDetailCount)
+    bagDetailPos = findViewById(R.id.bagDetailPos)
+    bagDetailId = findViewById(R.id.bagDetailId)
+    bagDetailPriceUnit = findViewById(R.id.bagDetailPriceUnit)
+    bagDetailPriceStack = findViewById(R.id.bagDetailPriceStack)
     imeText = findViewById(R.id.imeText)
     imeInput = findViewById(R.id.imeInput)
     imeInsertBtn = findViewById(R.id.imeInsertBtn)
@@ -164,6 +206,14 @@ class MainActivity : ComponentActivity() {
     navConfigBtn.setOnClickListener { switchPage(Page.CONFIG) }
     imeInsertBtn.setOnClickListener { sendImeText(submit = false) }
     imeSendBtn.setOnClickListener { sendImeText(submit = true) }
+    bagFilterAllBtn.setOnClickListener { setBagFilter(BagFilter.ALL) }
+    bagFilterUseBtn.setOnClickListener { setBagFilter(BagFilter.USE) }
+    bagFilterMatBtn.setOnClickListener { setBagFilter(BagFilter.MAT) }
+    bagFilterGearBtn.setOnClickListener { setBagFilter(BagFilter.GEAR) }
+    bagFilterOtherBtn.setOnClickListener { setBagFilter(BagFilter.OTHER) }
+    bagGrid.layoutManager = GridLayoutManager(this, 6)
+    bagGrid.adapter = bagAdapter
+    updateBagFilterButtons()
 
     rebuildAtlasIndexFromAssets()
     rebuildTileIndexFromAssets()
@@ -195,6 +245,7 @@ class MainActivity : ComponentActivity() {
       port = port,
       onPos = { p -> runOnUiThread { onPosPacket(p) } },
       onOverlay = { o -> runOnUiThread { onOverlayPacket(o) } },
+      onBag = { b -> runOnUiThread { onBagPacket(b) } },
       onAck = { msg -> runOnUiThread { log(msg); Log.d(logTag, msg) } },
       onLog = { msg -> runOnUiThread { log(msg); Log.d(logTag, msg) } }
     )
@@ -210,21 +261,27 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun disconnect() {
-    val c = client ?: return
-    lifecycleScope.launch {
-      c.stop()
+    val c = client
+    if (c != null) {
+      lifecycleScope.launch {
+        c.stop()
+      }
     }
     client = null
     connected = false
     lastImeFocus = false
     lastPos = null
     lastOverlay = null
+    lastBag = null
+    currentBagItems = emptyList()
+    selectedBagItem = null
     connectBtn.text = t("Connect", "连接")
     statusText.text = t("Map: waiting data", "地图: 等待数据")
     connStateText.text = t("Idle", "空闲")
     val waiting = t("debug: waiting packets", "调试: 等待数据包")
     debugStatusText.text = waiting
     updatePlayerPanel(null)
+    updateBagPanel(null)
     Log.i(logTag, "disconnect")
   }
 
@@ -260,11 +317,20 @@ class MainActivity : ComponentActivity() {
     Log.d(logTag, "overlay map=${o.map} zone=${o.zone} count=${o.count} rx=${o.overlays.size} ts=${o.ts}")
   }
 
+  private fun onBagPacket(b: BagPacket) {
+    lastBag = b
+    updateBagPanel(b)
+    refreshDebugPanel()
+    Log.d(logTag, "bag rev=${b.rev} items=${b.itemCount} rx=${b.items.size} ts=${b.ts}")
+  }
+
   private fun refreshDebugPanel() {
     val p = lastPos
     val o = lastOverlay
+    val b = lastBag
     val now = System.currentTimeMillis()
     val overlayAge = if (o != null && o.ts > 0L) (now - o.ts).coerceAtLeast(0L) else -1L
+    val bagAge = if (b != null && b.ts > 0L) (now - b.ts).coerceAtLeast(0L) else -1L
 
     val facingSrc = p?.facingSrc?.ifBlank { "none" } ?: "none"
     val imeLine = if (p == null) {
@@ -282,7 +348,17 @@ class MainActivity : ComponentActivity() {
         "overlay=${o.map.ifBlank { o.zone }}/${o.zone} count=${o.count} rx=${o.overlays.size} age=${age}ms"
       }
     }
-    val text = "facing_src=$facingSrc\n$overlayLine\n$imeLine"
+    val bagLine = if (b == null) {
+      t("bag=waiting", "bag=等待中")
+    } else {
+      val age = if (bagAge >= 0) bagAge else 0
+      if (uiLang == UiLang.ZH) {
+        "bag rev=${b.rev} 数量=${b.itemCount} 接收=${b.items.size} 延迟=${age}ms"
+      } else {
+        "bag rev=${b.rev} items=${b.itemCount} rx=${b.items.size} age=${age}ms"
+      }
+    }
+    val text = "facing_src=$facingSrc\n$overlayLine\n$bagLine\n$imeLine"
     debugStatusText.text = text
   }
 
@@ -329,7 +405,12 @@ class MainActivity : ComponentActivity() {
     portInput.hint = t("Port", "端口")
     connectBtn.text = if (connected) t("Disconnect", "断开") else t("Connect", "连接")
     langBtn.text = if (uiLang == UiLang.EN) "EN" else "中文"
-    bagText.text = t("Bag page (placeholder)", "背包页面（占位）")
+    bagFilterAllBtn.text = t("ALL", "全部")
+    bagFilterUseBtn.text = t("USE", "消耗")
+    bagFilterMatBtn.text = t("MAT", "材料")
+    bagFilterGearBtn.text = t("GEAR", "装备")
+    bagFilterOtherBtn.text = t("OTHER", "其他")
+    bagHintText.text = t("Tap an item to view details", "点物品查看详情")
     imeText.text = t("IME Bridge", "输入法桥接")
     imeInput.hint = t("Type text here...", "在这里输入文本...")
     imeInsertBtn.text = t("Insert", "插入")
@@ -349,6 +430,8 @@ class MainActivity : ComponentActivity() {
       statusText.text = t("Map: waiting data", "地图: 等待数据")
       updatePlayerPanel(null)
     }
+    updateBagFilterButtons()
+    updateBagPanel(lastBag)
     refreshDebugPanel()
   }
 
@@ -399,6 +482,251 @@ class MainActivity : ComponentActivity() {
     playerHpValue.text = "${p.hp}/${p.hpMax}"
     playerZoneValue.text = p.zone
     playerCoordsValue.text = "x=${"%.3f".format(p.x)} y=${"%.3f".format(p.y)}"
+  }
+
+  private fun setBagFilter(filter: BagFilter) {
+    if (currentBagFilter == filter) return
+    currentBagFilter = filter
+    updateBagFilterButtons()
+    updateBagPanel(lastBag)
+  }
+
+  private fun updateBagFilterButtons() {
+    bagFilterAllBtn.isSelected = currentBagFilter == BagFilter.ALL
+    bagFilterUseBtn.isSelected = currentBagFilter == BagFilter.USE
+    bagFilterMatBtn.isSelected = currentBagFilter == BagFilter.MAT
+    bagFilterGearBtn.isSelected = currentBagFilter == BagFilter.GEAR
+    bagFilterOtherBtn.isSelected = currentBagFilter == BagFilter.OTHER
+  }
+
+  private fun onBagItemTapped(item: BagItem) {
+    selectedBagItem = item
+    bagAdapter.setSelected(item)
+    updateBagDetail(item)
+  }
+
+  private fun updateBagPanel(packet: BagPacket?) {
+    if (packet == null) {
+      bagSummaryText.text = t("Bag: waiting data", "背包: 等待数据")
+      currentBagItems = emptyList()
+      selectedBagItem = null
+      bagAdapter.submitItems(emptyList())
+      bagAdapter.setSelected(null)
+      updateBagDetail(null)
+      return
+    }
+
+    currentBagItems = packet.items.sortedWith(compareBy<BagItem> { it.bag }.thenBy { it.slot })
+    val filteredItems = currentBagItems.filter { matchesBagFilter(it, currentBagFilter) }
+
+    if (selectedBagItem != null) {
+      selectedBagItem = currentBagItems.firstOrNull { sameBagSlot(it, selectedBagItem!!) }
+    }
+    if (selectedBagItem == null || filteredItems.none { sameBagSlot(it, selectedBagItem!!) }) {
+      selectedBagItem = filteredItems.firstOrNull()
+    }
+
+    bagSummaryText.text = if (uiLang == UiLang.ZH) {
+      "背包 ${packet.itemCount} 项 · 筛选 ${filteredItems.size} 项 · rev=${packet.rev}"
+    } else {
+      "Bag ${packet.itemCount} items · ${bagFilterLabel(currentBagFilter)} ${filteredItems.size} · rev=${packet.rev}"
+    }
+    bagAdapter.submitItems(filteredItems)
+    bagAdapter.setSelected(selectedBagItem)
+    updateBagDetail(selectedBagItem)
+  }
+
+  private fun bagFilterLabel(filter: BagFilter): String {
+    return when (filter) {
+      BagFilter.ALL -> t("all", "全部")
+      BagFilter.USE -> t("use", "消耗")
+      BagFilter.MAT -> t("mat", "材料")
+      BagFilter.GEAR -> t("gear", "装备")
+      BagFilter.OTHER -> t("other", "其他")
+    }
+  }
+
+  private fun sameBagSlot(a: BagItem, b: BagItem): Boolean {
+    return a.bag == b.bag && a.slot == b.slot
+  }
+
+  private fun matchesBagFilter(item: BagItem, filter: BagFilter): Boolean {
+    if (filter == BagFilter.ALL) return true
+    return classifyBagItem(item) == filter
+  }
+
+  private fun classifyBagItem(item: BagItem): BagFilter {
+    val cls = item.itemClass?.trim()?.lowercase(Locale.US).orEmpty()
+    val sub = item.itemSubClass?.trim()?.lowercase(Locale.US).orEmpty()
+    val equip = item.equipLoc?.trim().orEmpty()
+
+    if (
+      containsAny(
+        cls,
+        "consumable", "消耗品", "药水", "药剂", "食物", "饮料", "绷带", "卷轴"
+      ) ||
+      containsAny(
+        sub,
+        "potion", "elixir", "flask", "food", "drink", "bandage", "scroll",
+        "药水", "药剂", "食物", "饮料", "绷带", "卷轴"
+      )
+    ) {
+      return BagFilter.USE
+    }
+
+    if (
+      containsAny(
+        cls,
+        "trade goods", "tradegood", "recipe", "reagent", "projectile", "quiver", "key",
+        "商品", "材料", "弹药", "箭袋", "钥匙", "配方"
+      ) ||
+      containsAny(
+        sub,
+        "herb", "metal", "ore", "cloth", "leather", "elemental", "parts", "enchanting", "engineering",
+        "草药", "矿石", "布料", "皮革", "元素", "零件", "附魔", "工程"
+      )
+    ) {
+      return BagFilter.MAT
+    }
+
+    if (
+      containsAny(cls, "weapon", "armor", "武器", "护甲", "装备") ||
+      isGearEquipLoc(equip)
+    ) {
+      return BagFilter.GEAR
+    }
+
+    val key = item.iconTex
+      ?.substringAfterLast('\\')
+      ?.substringAfterLast('/')
+      ?.lowercase(Locale.US)
+      .orEmpty()
+
+    if (containsAny(key, "potion", "food", "bandage", "scroll", "water", "drink")) return BagFilter.USE
+    if (containsAny(key, "herb", "ore", "bar_", "cloth", "leather", "fang", "spider", "fish", "feather", "web")) return BagFilter.MAT
+    if (containsAny(key, "helmet", "chest", "boots", "pants", "belt", "shield", "sword", "axe", "mace", "staff", "gauntlets", "bracer", "cloak", "ring", "amulet")) return BagFilter.GEAR
+    return BagFilter.OTHER
+  }
+
+  private fun isGearEquipLoc(equipLoc: String): Boolean {
+    if (equipLoc.isBlank()) return false
+    val loc = equipLoc
+      .trim()
+      .uppercase(Locale.US)
+      .removePrefix("INVTYPE_")
+
+    return when (loc) {
+      "HEAD", "NECK", "SHOULDER", "BODY", "CHEST", "ROBE", "WAIST", "LEGS", "FEET", "WRIST",
+      "HANDS", "FINGER", "TRINKET", "CLOAK", "WEAPON", "SHIELD", "2HWEAPON", "WEAPONMAINHAND",
+      "WEAPONOFFHAND", "HOLDABLE", "RANGED", "THROWN", "RANGEDRIGHT", "RELIC", "TABARD" -> true
+      else -> false
+    }
+  }
+
+  private fun containsAny(text: String, vararg needles: String): Boolean {
+    for (n in needles) {
+      if (text.contains(n)) return true
+    }
+    return false
+  }
+
+  private fun updateBagDetail(item: BagItem?) {
+    if (item == null) {
+      bagDetailIcon.setImageResource(R.drawable.bag_slot_placeholder)
+      bagDetailName.text = t("No item selected", "未选中物品")
+      bagDetailType.text = t("Type: -", "类型: -")
+      bagDetailClass.text = t("Class: -", "分类: -")
+      bagDetailCount.text = t("Count: -", "数量: -")
+      bagDetailPos.text = t("Bag/Slot: -", "背包/格子: -")
+      bagDetailId.text = t("Item ID: -", "物品ID: -")
+      bagDetailPriceUnit.text = t("Unit: -", "单价: -")
+      bagDetailPriceStack.text = t("Stack: -", "总价: -")
+      return
+    }
+
+    val itemName = item.name?.takeIf { it.isNotBlank() } ?: parseItemNameFromLink(item.link) ?: "Item #${item.itemId}"
+    val typeLabel = bagFilterLabel(classifyBagItem(item))
+    val classLabel = buildClassLabel(item)
+    val unitCopper = item.sellPrice.toLong().coerceAtLeast(0L)
+    val stackCopper = unitCopper * item.count.toLong().coerceAtLeast(0L)
+    bagDetailName.text = itemName
+    bagDetailType.text = if (uiLang == UiLang.ZH) "类型: $typeLabel" else "Type: $typeLabel"
+    bagDetailClass.text = if (uiLang == UiLang.ZH) "分类: $classLabel" else "Class: $classLabel"
+    bagDetailCount.text = if (uiLang == UiLang.ZH) "数量: ${item.count}" else "Count: ${item.count}"
+    bagDetailPos.text = if (uiLang == UiLang.ZH) "背包/格子: ${item.bag}/${item.slot}" else "Bag/Slot: ${item.bag}/${item.slot}"
+    bagDetailId.text = if (uiLang == UiLang.ZH) "物品ID: ${item.itemId}" else "Item ID: ${item.itemId}"
+    bagDetailPriceUnit.text = if (uiLang == UiLang.ZH) "单价: ${formatCoin(unitCopper)}" else "Unit: ${formatCoin(unitCopper)}"
+    bagDetailPriceStack.text = if (uiLang == UiLang.ZH) "总价: ${formatCoin(stackCopper)}" else "Stack: ${formatCoin(stackCopper)}"
+
+    bagDetailIcon.load(buildBagIconUrl(item.iconTex)) {
+      placeholder(R.drawable.bag_slot_placeholder)
+      error(R.drawable.bag_slot_placeholder)
+      crossfade(true)
+    }
+  }
+
+  private fun buildClassLabel(item: BagItem): String {
+    val cls = item.itemClass?.trim().orEmpty()
+    val sub = item.itemSubClass?.trim().orEmpty()
+    val equip = formatEquipLoc(item.equipLoc)
+
+    val base = when {
+      cls.isNotEmpty() && sub.isNotEmpty() -> "$cls / $sub"
+      cls.isNotEmpty() -> cls
+      sub.isNotEmpty() -> sub
+      else -> t("-", "-")
+    }
+    return if (equip.isNotEmpty()) "$base · $equip" else base
+  }
+
+  private fun formatEquipLoc(equipLoc: String?): String {
+    if (equipLoc.isNullOrBlank()) return ""
+    val raw = equipLoc.trim()
+    val normalized = raw.removePrefix("INVTYPE_").replace('_', ' ')
+    if (normalized.isBlank()) return ""
+    val words = normalized.lowercase(Locale.US).split(' ').filter { it.isNotBlank() }
+    return words.joinToString(" ") { part ->
+      part.replaceFirstChar { c ->
+        if (c.isLowerCase()) c.titlecase(Locale.US) else c.toString()
+      }
+    }
+  }
+
+  private fun formatCoin(copper: Long): String {
+    val safe = copper.coerceAtLeast(0L)
+    val gold = safe / 10_000L
+    val silver = (safe % 10_000L) / 100L
+    val copperLeft = safe % 100L
+    val parts = ArrayList<String>(3)
+
+    if (uiLang == UiLang.ZH) {
+      if (gold > 0L) parts.add("${gold}金")
+      if (silver > 0L) parts.add("${silver}银")
+      if (copperLeft > 0L || parts.isEmpty()) parts.add("${copperLeft}铜")
+    } else {
+      if (gold > 0L) parts.add("${gold}g")
+      if (silver > 0L) parts.add("${silver}s")
+      if (copperLeft > 0L || parts.isEmpty()) parts.add("${copperLeft}c")
+    }
+    return parts.joinToString(" ")
+  }
+
+  private fun parseItemNameFromLink(link: String?): String? {
+    if (link.isNullOrBlank()) return null
+    val m = Regex("\\|h\\[(.*?)]\\|h").find(link) ?: return null
+    val n = m.groupValues.getOrNull(1)?.trim().orEmpty()
+    return if (n.isEmpty()) null else n
+  }
+
+  private fun buildBagIconUrl(iconTex: String?): String? {
+    if (iconTex.isNullOrBlank()) return null
+    val iconName = iconTex
+      .substringAfterLast('\\')
+      .substringAfterLast('/')
+      .trim()
+      .lowercase(Locale.US)
+    if (iconName.isBlank()) return null
+    return "https://render.worldofwarcraft.com/us/icons/56/$iconName.jpg"
   }
 
   private fun ensureMapLoaded(map: String, zone: String) {
