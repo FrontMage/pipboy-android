@@ -3,7 +3,9 @@ package com.turtlewow.pipboy
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Looper
 import android.util.Log
@@ -16,6 +18,7 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -23,15 +26,27 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.ArrayDeque
 import java.util.Date
 import java.util.Collections
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.ceil
 
 class MainActivity : ComponentActivity() {
   enum class UiLang { EN, ZH }
-  enum class Page { MAP, BAG, IME, DEBUG, CONFIG }
+  enum class Page { MAP, BAG, IME, DEBUG, CONFIG, CHARACTER }
   enum class BagFilter { ALL, USE, MAT, GEAR, OTHER }
+  enum class QuestPanelMode { TRACKER, DETAIL }
+  enum class MapDisplayMode { WORLD, MINI }
+
+  data class QuestTrackerRow(
+    val questId: Int,
+    val title: String,
+    val meta: String,
+    val complete: Boolean,
+    val titleColor: Int
+  )
 
   data class ZoneTileCatalog(
     val dirName: String,
@@ -42,13 +57,45 @@ class MainActivity : ComponentActivity() {
 
   data class RemoteMapIndex(
     val tileDirs: List<String>,
-    val iconsAvailable: Boolean
+    val iconsAvailable: Boolean,
+    val uiTexturesAvailable: Boolean
+  )
+
+  data class DebugLogEntry(
+    var ts: String,
+    val message: String,
+    val verbose: Boolean,
+    var count: Int
   )
 
   companion object {
     private const val MAP_LOGICAL_WIDTH = 1002
     private const val MAP_LOGICAL_HEIGHT = 668
     private const val TILE_SIZE = 256
+    private const val DEBUG_LOG_MAX_LINES = 500
+    private const val BUDDY_MOVE_THRESHOLD = 0.00045f
+    private const val BUDDY_HURT_FLASH_MS = 1300L
+    private val CHARACTER_VISIBLE_SLOT_SET = setOf(
+      "HeadSlot",
+      "NeckSlot",
+      "ShoulderSlot",
+      "BackSlot",
+      "ChestSlot",
+      "ShirtSlot",
+      "TabardSlot",
+      "WristSlot",
+      "HandsSlot",
+      "WaistSlot",
+      "LegsSlot",
+      "FeetSlot",
+      "Finger0Slot",
+      "Finger1Slot",
+      "Trinket0Slot",
+      "Trinket1Slot",
+      "MainHandSlot",
+      "SecondaryHandSlot",
+      "AmmoSlot"
+    )
   }
 
   private val logTag = "PipBoy"
@@ -58,6 +105,7 @@ class MainActivity : ComponentActivity() {
   private lateinit var langBtn: Button
   private lateinit var navHeaderText: TextView
   private lateinit var navMapBtn: Button
+  private lateinit var navCharBtn: Button
   private lateinit var navBagBtn: Button
   private lateinit var navImeBtn: Button
   private lateinit var navDebugBtn: Button
@@ -65,10 +113,16 @@ class MainActivity : ComponentActivity() {
   private lateinit var titleText: TextView
   private lateinit var connStateText: TextView
   private lateinit var statusText: TextView
+  private lateinit var mapModeMiniBtn: Button
+  private lateinit var mapModeWorldBtn: Button
   private lateinit var debugStatusText: TextView
+  private lateinit var debugVerboseBtn: Button
+  private lateinit var debugClearBtn: Button
   private lateinit var logText: TextView
   private lateinit var mapView: MapSurfaceView
+  private lateinit var miniMapRadarView: MiniMapRadarView
   private lateinit var pageMap: View
+  private lateinit var pageCharacter: View
   private lateinit var pageBag: View
   private lateinit var pageIme: View
   private lateinit var pageDebug: View
@@ -90,40 +144,75 @@ class MainActivity : ComponentActivity() {
   private lateinit var bagDetailId: TextView
   private lateinit var bagDetailPriceUnit: TextView
   private lateinit var bagDetailPriceStack: TextView
+  private lateinit var characterPaperDoll: CharacterPaperDollView
+  private lateinit var characterStatsTitle: TextView
+  private lateinit var characterStatsBody: TextView
+  private lateinit var characterDetailTitle: TextView
+  private lateinit var characterDetailIconFrame: View
+  private lateinit var characterDetailIcon: ImageView
+  private lateinit var characterDetailName: TextView
+  private lateinit var characterDetailBody: TextView
   private lateinit var imeText: TextView
   private lateinit var imeInput: EditText
   private lateinit var imeInsertBtn: Button
   private lateinit var imeSendBtn: Button
-  private lateinit var playerPanelTitle: TextView
-  private lateinit var playerNameLabel: TextView
-  private lateinit var playerLevelLabel: TextView
-  private lateinit var playerHpLabel: TextView
-  private lateinit var playerZoneLabel: TextView
-  private lateinit var playerCoordsLabel: TextView
-  private lateinit var playerNameValue: TextView
-  private lateinit var playerLevelValue: TextView
-  private lateinit var playerHpValue: TextView
-  private lateinit var playerZoneValue: TextView
-  private lateinit var playerCoordsValue: TextView
+  private lateinit var questPanelTitle: TextView
+  private lateinit var questModeTrackerBtn: Button
+  private lateinit var questModeDetailBtn: Button
+  private lateinit var questTrackerList: RecyclerView
+  private lateinit var questDetailScroll: View
+  private lateinit var questDetailTitle: TextView
+  private lateinit var questDetailLevel: TextView
+  private lateinit var questDetailProgress: TextView
+  private lateinit var questDetailObjectives: TextView
+  private lateinit var questDetailMeta: TextView
+  private lateinit var questDetailFocusBtn: Button
+  private lateinit var questDetailBackBtn: Button
 
   private var client: UdpBridgeClient? = null
   private var connected = false
   private var lastPos: PosPacket? = null
   private var lastOverlay: OverlayPacket? = null
+  private var lastQuestMarkers: QuestMarkersPacket? = null
+  private var lastQuestLog: QuestLogPacket? = null
   private var lastBag: BagPacket? = null
+  private var lastEquip: EquipPacket? = null
+  private var lastCharStats: CharacterStatsPacket? = null
+  private var lastResourceScan: ResourceScanPacket? = null
+  private var lastMinimapKey: MinimapKeyPacket? = null
+  private var lastMinimapState: MinimapStatePacket? = null
+  private var currentMinimapAssetPath: String? = null
+  private var currentMinimapCompositeKey: String? = null
   private var lastPosLogMs: Long = 0L
+  private var buddyLastX: Float? = null
+  private var buddyLastY: Float? = null
+  private var buddyLastSampleMs: Long = 0L
+  private var buddyLastHp: Int = -1
+  private var buddyHurtUntilMs: Long = 0L
   private var currentHost: String = ""
   private var currentPort: Int = 38442
   private var currentAssetPort: Int = AssetBridgeClient.DEFAULT_PORT
   private var remoteAssetsAvailable = false
   private var remoteIconsAvailable = false
+  private var remoteUiTexturesAvailable = false
   private var uiLang: UiLang = UiLang.EN
   private var currentPage: Page = Page.MAP
   private var currentBagFilter: BagFilter = BagFilter.ALL
+  private var currentQuestPanelMode: QuestPanelMode = QuestPanelMode.TRACKER
+  private var currentMapMode: MapDisplayMode = MapDisplayMode.WORLD
   private var currentBagItems: List<BagItem> = emptyList()
   private var selectedBagItem: BagItem? = null
+  private var selectedQuestId: Int? = null
+  private var selectedQuestTitle: String? = null
+  private var selectedEquipSlot: String? = null
+  private var focusedQuestId: Int? = null
+  private var questRows: List<QuestTrackerRow> = emptyList()
+  private var visibleQuestMarkers: List<QuestMarker> = emptyList()
+  private lateinit var questAdapter: QuestTrackerAdapter
   private var lastImeFocus = false
   private lateinit var bagAdapter: BagGridAdapter
+  private var debugVerboseEnabled = false
+  private val debugLogBuffer: ArrayDeque<DebugLogEntry> = ArrayDeque()
 
   // slug(zone) -> tile dir name, e.g. ELWYNN -> Elwynn
   private val tileZoneIndex = LinkedHashMap<String, String>()
@@ -135,9 +224,14 @@ class MainActivity : ComponentActivity() {
   private val pendingAssetFetch = Collections.synchronizedSet(mutableSetOf<String>())
   private val pendingZoneListFetch = Collections.synchronizedSet(mutableSetOf<String>())
   private val pendingBagIconFetch = Collections.synchronizedSet(mutableSetOf<String>())
+  private val pendingUiTextureFetch = Collections.synchronizedSet(mutableSetOf<String>())
   private val bagIconBitmapCache = LinkedHashMap<String, Bitmap>(256, 0.75f, true)
+  private val uiTextureBitmapCache = LinkedHashMap<String, Bitmap>(192, 0.75f, true)
+  private val equipEmptyProbeLogged = Collections.synchronizedSet(mutableSetOf<String>())
+  private val uiTextureMissLogged = Collections.synchronizedSet(mutableSetOf<String>())
   private val assetCacheDir by lazy { File(cacheDir, "map_assets") }
   private val bagIconCacheDir by lazy { File(cacheDir, "bag_icons") }
+  private val uiTextureCacheDir by lazy { File(cacheDir, "ui_textures") }
 
   private val prefs by lazy { getSharedPreferences("pipboy", MODE_PRIVATE) }
 
@@ -147,6 +241,7 @@ class MainActivity : ComponentActivity() {
 
     navHeaderText = findViewById(R.id.navHeaderText)
     navMapBtn = findViewById(R.id.navMapBtn)
+    navCharBtn = findViewById(R.id.navCharBtn)
     navBagBtn = findViewById(R.id.navBagBtn)
     navImeBtn = findViewById(R.id.navImeBtn)
     navDebugBtn = findViewById(R.id.navDebugBtn)
@@ -154,6 +249,7 @@ class MainActivity : ComponentActivity() {
     titleText = findViewById(R.id.titleText)
     connStateText = findViewById(R.id.connStateText)
     pageMap = findViewById(R.id.pageMap)
+    pageCharacter = findViewById(R.id.pageCharacter)
     pageBag = findViewById(R.id.pageBag)
     pageIme = findViewById(R.id.pageIme)
     pageDebug = findViewById(R.id.pageDebug)
@@ -175,29 +271,43 @@ class MainActivity : ComponentActivity() {
     bagDetailId = findViewById(R.id.bagDetailId)
     bagDetailPriceUnit = findViewById(R.id.bagDetailPriceUnit)
     bagDetailPriceStack = findViewById(R.id.bagDetailPriceStack)
+    characterPaperDoll = findViewById(R.id.characterPaperDoll)
+    characterStatsTitle = findViewById(R.id.characterStatsTitle)
+    characterStatsBody = findViewById(R.id.characterStatsBody)
+    characterDetailTitle = findViewById(R.id.characterDetailTitle)
+    characterDetailIconFrame = findViewById(R.id.characterDetailIconFrame)
+    characterDetailIcon = findViewById(R.id.characterDetailIcon)
+    characterDetailName = findViewById(R.id.characterDetailName)
+    characterDetailBody = findViewById(R.id.characterDetailBody)
     imeText = findViewById(R.id.imeText)
     imeInput = findViewById(R.id.imeInput)
     imeInsertBtn = findViewById(R.id.imeInsertBtn)
     imeSendBtn = findViewById(R.id.imeSendBtn)
-    playerPanelTitle = findViewById(R.id.playerPanelTitle)
-    playerNameLabel = findViewById(R.id.playerNameLabel)
-    playerLevelLabel = findViewById(R.id.playerLevelLabel)
-    playerHpLabel = findViewById(R.id.playerHpLabel)
-    playerZoneLabel = findViewById(R.id.playerZoneLabel)
-    playerCoordsLabel = findViewById(R.id.playerCoordsLabel)
+    questPanelTitle = findViewById(R.id.questPanelTitle)
+    questModeTrackerBtn = findViewById(R.id.questModeTrackerBtn)
+    questModeDetailBtn = findViewById(R.id.questModeDetailBtn)
+    questTrackerList = findViewById(R.id.questTrackerList)
+    questDetailScroll = findViewById(R.id.questDetailScroll)
+    questDetailTitle = findViewById(R.id.questDetailTitle)
+    questDetailLevel = findViewById(R.id.questDetailLevel)
+    questDetailProgress = findViewById(R.id.questDetailProgress)
+    questDetailObjectives = findViewById(R.id.questDetailObjectives)
+    questDetailMeta = findViewById(R.id.questDetailMeta)
+    questDetailFocusBtn = findViewById(R.id.questDetailFocusBtn)
+    questDetailBackBtn = findViewById(R.id.questDetailBackBtn)
     ipInput = findViewById(R.id.ipInput)
     portInput = findViewById(R.id.portInput)
     connectBtn = findViewById(R.id.connectBtn)
     langBtn = findViewById(R.id.langBtn)
     statusText = findViewById(R.id.statusText)
+    mapModeMiniBtn = findViewById(R.id.mapModeMiniBtn)
+    mapModeWorldBtn = findViewById(R.id.mapModeWorldBtn)
     debugStatusText = findViewById(R.id.debugStatusText)
+    debugVerboseBtn = findViewById(R.id.debugVerboseBtn)
+    debugClearBtn = findViewById(R.id.debugClearBtn)
     logText = findViewById(R.id.logText)
     mapView = findViewById(R.id.mapView)
-    playerNameValue = findViewById(R.id.playerNameValue)
-    playerLevelValue = findViewById(R.id.playerLevelValue)
-    playerHpValue = findViewById(R.id.playerHpValue)
-    playerZoneValue = findViewById(R.id.playerZoneValue)
-    playerCoordsValue = findViewById(R.id.playerCoordsValue)
+    miniMapRadarView = findViewById(R.id.miniMapRadarView)
 
     ipInput.setText(prefs.getString("ip", "192.168.0.112"))
     portInput.setText(prefs.getInt("port", 38442).toString())
@@ -205,6 +315,11 @@ class MainActivity : ComponentActivity() {
     currentPort = portInput.text.toString().trim().toIntOrNull() ?: 38442
     uiLang = if (prefs.getString("ui_lang", "en") == "zh") UiLang.ZH else UiLang.EN
     currentPage = Page.entries.getOrElse(prefs.getInt("current_page", 0)) { Page.MAP }
+    currentMapMode = when (prefs.getString("map_mode", "world")) {
+      "mini" -> MapDisplayMode.MINI
+      else -> MapDisplayMode.WORLD
+    }
+    debugVerboseEnabled = prefs.getBoolean("debug_verbose", false)
 
     connectBtn.setOnClickListener {
       if (connected) {
@@ -219,12 +334,60 @@ class MainActivity : ComponentActivity() {
       applyLanguage()
     }
     navMapBtn.setOnClickListener { switchPage(Page.MAP) }
+    navCharBtn.setOnClickListener { switchPage(Page.CHARACTER) }
     navBagBtn.setOnClickListener { switchPage(Page.BAG) }
     navImeBtn.setOnClickListener { switchPage(Page.IME) }
     navDebugBtn.setOnClickListener { switchPage(Page.DEBUG) }
     navConfigBtn.setOnClickListener { switchPage(Page.CONFIG) }
+    mapModeWorldBtn.setOnClickListener { switchMapDisplayMode(MapDisplayMode.WORLD) }
+    mapModeMiniBtn.setOnClickListener { switchMapDisplayMode(MapDisplayMode.MINI) }
+    debugVerboseBtn.setOnClickListener {
+      debugVerboseEnabled = !debugVerboseEnabled
+      prefs.edit().putBoolean("debug_verbose", debugVerboseEnabled).apply()
+      refreshDebugLogView()
+      updateDebugControls()
+      log(
+        if (debugVerboseEnabled) {
+          t("debug verbose enabled", "调试详细日志已开启")
+        } else {
+          t("debug verbose disabled", "调试详细日志已关闭")
+        }
+      )
+    }
+    debugClearBtn.setOnClickListener {
+      debugLogBuffer.clear()
+      refreshDebugLogView()
+      log(t("debug log cleared", "调试日志已清空"))
+    }
     imeInsertBtn.setOnClickListener { sendImeText(submit = false) }
     imeSendBtn.setOnClickListener { sendImeText(submit = true) }
+    questModeTrackerBtn.setOnClickListener {
+      currentQuestPanelMode = QuestPanelMode.TRACKER
+      updateQuestPanel()
+    }
+    questModeDetailBtn.setOnClickListener {
+      if (selectedQuestId != null || !selectedQuestTitle.isNullOrBlank()) {
+        currentQuestPanelMode = QuestPanelMode.DETAIL
+      }
+      updateQuestPanel()
+    }
+    questDetailBackBtn.setOnClickListener {
+      focusedQuestId = null
+      currentQuestPanelMode = QuestPanelMode.TRACKER
+      updateQuestPanel()
+      updateVisibleQuestMarkers()
+    }
+    questDetailFocusBtn.setOnClickListener {
+      val sid = selectedQuestId
+      if (sid != null && sid > 0) {
+        focusedQuestId = if (focusedQuestId == sid) null else sid
+      } else {
+        focusedQuestId = null
+      }
+      updateQuestPanel()
+      updateVisibleQuestMarkers()
+    }
+    mapView.onQuestMarkerTap = { marker -> onQuestMarkerTapped(marker) }
     bagFilterAllBtn.setOnClickListener { setBagFilter(BagFilter.ALL) }
     bagFilterUseBtn.setOnClickListener { setBagFilter(BagFilter.USE) }
     bagFilterMatBtn.setOnClickListener { setBagFilter(BagFilter.MAT) }
@@ -237,13 +400,29 @@ class MainActivity : ComponentActivity() {
     )
     bagGrid.layoutManager = GridLayoutManager(this, 6)
     bagGrid.adapter = bagAdapter
+    characterPaperDoll.setIconBinder { imageView, slot, item ->
+      bindEquipIcon(imageView, slot, item)
+    }
+    characterPaperDoll.onSlotTap = { slot, item ->
+      onEquipSlotTapped(slot, item)
+    }
+    characterPaperDoll.onCharacterFrameTap = {
+      onCharacterFrameTapped()
+    }
+    questAdapter = QuestTrackerAdapter { row ->
+      onQuestRowTapped(row)
+    }
+    questTrackerList.layoutManager = LinearLayoutManager(this)
+    questTrackerList.adapter = questAdapter
     updateBagFilterButtons()
     assetCacheDir.mkdirs()
     bagIconCacheDir.mkdirs()
+    uiTextureCacheDir.mkdirs()
     tileZoneIndex.clear()
     zoneCatalogCache.clear()
     zoneCatalogFilesRemote.clear()
     applyLanguage()
+    updateMapDisplayModeUi()
     switchPage(currentPage)
     log("ready")
   }
@@ -254,6 +433,7 @@ class MainActivity : ComponentActivity() {
     bitmapCache.clear()
     composedCache.clear()
     bagIconBitmapCache.clear()
+    uiTextureBitmapCache.clear()
   }
 
   private fun connect() {
@@ -264,6 +444,7 @@ class MainActivity : ComponentActivity() {
     currentAssetPort = AssetBridgeClient.DEFAULT_PORT
     remoteAssetsAvailable = false
     remoteIconsAvailable = false
+    remoteUiTexturesAvailable = false
 
     prefs.edit()
       .putString("ip", ip)
@@ -275,9 +456,16 @@ class MainActivity : ComponentActivity() {
       port = port,
       onPos = { p -> runOnUiThread { onPosPacket(p) } },
       onOverlay = { o -> runOnUiThread { onOverlayPacket(o) } },
+      onQuestMarkers = { q -> runOnUiThread { onQuestMarkersPacket(q) } },
+      onQuestLog = { ql -> runOnUiThread { onQuestLogPacket(ql) } },
       onBag = { b -> runOnUiThread { onBagPacket(b) } },
-      onAck = { msg -> runOnUiThread { log(msg); Log.d(logTag, msg) } },
-      onLog = { msg -> runOnUiThread { log(msg); Log.d(logTag, msg) } }
+      onEquip = { e -> runOnUiThread { onEquipPacket(e) } },
+      onCharStats = { s -> runOnUiThread { onCharStatsPacket(s) } },
+      onResourceScan = { rs -> runOnUiThread { onResourceScanPacket(rs) } },
+      onMinimapKey = { mk -> runOnUiThread { onMinimapKeyPacket(mk) } },
+      onMinimapState = { ms -> runOnUiThread { onMinimapStatePacket(ms) } },
+      onAck = { msg -> runOnUiThread { logVerbose(msg); Log.d(logTag, msg) } },
+      onLog = { msg -> runOnUiThread { logVerbose(msg); Log.d(logTag, msg) } }
     )
 
     c.start(lifecycleScope)
@@ -288,6 +476,7 @@ class MainActivity : ComponentActivity() {
     connStateText.text = statusConnectedText(ip, port)
     switchPage(Page.MAP)
     refreshRemoteMapIndex()
+    refreshMiniMapRenderState()
     Log.i(logTag, "connect host=$ip port=$port")
   }
 
@@ -303,34 +492,93 @@ class MainActivity : ComponentActivity() {
     lastImeFocus = false
     lastPos = null
     lastOverlay = null
+    lastQuestMarkers = null
+    lastQuestLog = null
     lastBag = null
+    lastEquip = null
+    lastCharStats = null
+    lastResourceScan = null
+    lastMinimapKey = null
+    lastMinimapState = null
+    currentMinimapAssetPath = null
+    currentMinimapCompositeKey = null
     remoteAssetsAvailable = false
     remoteIconsAvailable = false
+    remoteUiTexturesAvailable = false
     zoneCatalogFilesRemote.clear()
     zoneCatalogCache.clear()
     mapSourceLogged.clear()
     pendingAssetFetch.clear()
     pendingZoneListFetch.clear()
     pendingBagIconFetch.clear()
+    pendingUiTextureFetch.clear()
     bagIconBitmapCache.clear()
+    uiTextureBitmapCache.clear()
     currentBagItems = emptyList()
     selectedBagItem = null
+    selectedEquipSlot = null
+    selectedQuestId = null
+    selectedQuestTitle = null
+    focusedQuestId = null
+    questRows = emptyList()
     connectBtn.text = t("Connect", "连接")
     statusText.text = t("Map: waiting data", "地图: 等待数据")
     connStateText.text = t("Idle", "空闲")
     val waiting = t("debug: waiting packets", "调试: 等待数据包")
     debugStatusText.text = waiting
-    updatePlayerPanel(null)
     updateBagPanel(null)
+    updateEquipPanel(null)
+    characterPaperDoll.setBuddyState(PipBoyBuddyView.State.IDLE)
+    buddyLastX = null
+    buddyLastY = null
+    buddyLastSampleMs = 0L
+    buddyLastHp = -1
+    buddyHurtUntilMs = 0L
+    mapView.setQuestMarkers(emptyList(), null)
+    miniMapRadarView.setPosition(null)
+    miniMapRadarView.setResourceScan(null)
+    miniMapRadarView.setMiniMapComposite(null, null, null)
+    miniMapRadarView.setMiniMapBitmap(null)
+    miniMapRadarView.setMinimapState(null)
+    miniMapRadarView.setMinimapKey(null)
+    miniMapRadarView.setRenderActive(false)
+    updateQuestPanel()
     Log.i(logTag, "disconnect")
   }
 
   private fun onPosPacket(p: PosPacket) {
+    val nowLocal = System.currentTimeMillis()
+    val prevX = buddyLastX
+    val prevY = buddyLastY
+    var moving = false
+    if (prevX != null && prevY != null && buddyLastSampleMs > 0L) {
+      val dtSec = ((nowLocal - buddyLastSampleMs).coerceAtLeast(1L)) / 1000f
+      val dx = abs(p.x - prevX)
+      val dy = abs(p.y - prevY)
+      val speed = (dx + dy) / dtSec
+      moving = speed >= BUDDY_MOVE_THRESHOLD
+    }
+    buddyLastX = p.x
+    buddyLastY = p.y
+    buddyLastSampleMs = nowLocal
+    if (buddyLastHp > 0 && p.hp in 0 until buddyLastHp) {
+      buddyHurtUntilMs = nowLocal + BUDDY_HURT_FLASH_MS
+    }
+    buddyLastHp = p.hp
+
+    val buddyState = when {
+      nowLocal < buddyHurtUntilMs -> PipBoyBuddyView.State.HURT
+      moving -> PipBoyBuddyView.State.WALK
+      else -> PipBoyBuddyView.State.IDLE
+    }
+    characterPaperDoll.setBuddyState(buddyState)
+
     lastPos = p
     updateMapStatus(p)
-    updatePlayerPanel(p)
     ensureMapLoaded(p.map, p.zone)
     mapView.setPosition(p)
+    miniMapRadarView.setPosition(p)
+    updateVisibleQuestMarkers()
     refreshDebugPanel()
 
     if (p.imeFocus && !lastImeFocus) {
@@ -357,6 +605,21 @@ class MainActivity : ComponentActivity() {
     Log.d(logTag, "overlay map=${o.map} zone=${o.zone} count=${o.count} rx=${o.overlays.size} ts=${o.ts}")
   }
 
+  private fun onQuestMarkersPacket(q: QuestMarkersPacket) {
+    lastQuestMarkers = q
+    updateVisibleQuestMarkers()
+    updateQuestPanel()
+    refreshDebugPanel()
+    Log.d(logTag, "quest map=${q.map} zone=${q.zone} mapId=${q.mapId} count=${q.count} rx=${q.markers.size} ts=${q.ts}")
+  }
+
+  private fun onQuestLogPacket(packet: QuestLogPacket) {
+    lastQuestLog = packet
+    updateQuestPanel()
+    refreshDebugPanel()
+    Log.d(logTag, "quest_log count=${packet.count} rx=${packet.entries.size} ts=${packet.ts}")
+  }
+
   private fun onBagPacket(b: BagPacket) {
     lastBag = b
     updateBagPanel(b)
@@ -364,13 +627,147 @@ class MainActivity : ComponentActivity() {
     Log.d(logTag, "bag rev=${b.rev} items=${b.itemCount} rx=${b.items.size} ts=${b.ts}")
   }
 
+  private fun onEquipPacket(packet: EquipPacket) {
+    lastEquip = packet
+    updateEquipPanel(packet)
+    refreshDebugPanel()
+    Log.d(logTag, "equip count=${packet.count} eq=${packet.equippedCount} y=${packet.yellowCount} r=${packet.redCount} ts=${packet.ts}")
+  }
+
+  private fun onCharStatsPacket(packet: CharacterStatsPacket) {
+    lastCharStats = packet
+    updateCharacterStatsPanel()
+    refreshDebugPanel()
+    Log.d(logTag, "char_stats count=${packet.count} rx=${packet.rows.size} ts=${packet.ts}")
+  }
+
+  private fun onResourceScanPacket(packet: ResourceScanPacket) {
+    lastResourceScan = packet
+    miniMapRadarView.setResourceScan(packet)
+    updateMiniMapTexture()
+    refreshDebugPanel()
+    Log.d(logTag, "gobj_scan count=${packet.count} scanned=${packet.scanned} nodes=${packet.nodes.size} ts=${packet.ts}")
+  }
+
+  private fun onMinimapKeyPacket(packet: MinimapKeyPacket) {
+    lastMinimapKey = packet
+    if (lastMinimapState != null) {
+      return
+    }
+    miniMapRadarView.setMinimapKey(packet)
+    val normalizedAsset = packet.asset.trim()
+    if (normalizedAsset.isNotEmpty()) {
+      currentMinimapAssetPath = "minimap_tiles/$normalizedAsset"
+      updateMiniMapTexture()
+    }
+    logVerbose("minimap_key zone=${packet.zone} tile=${packet.tile} asset=${packet.asset}")
+    Log.d(logTag, "minimap_key zone=${packet.zone} tile=${packet.tile} asset=${packet.asset} ts=${packet.ts}")
+  }
+
+  private fun onMinimapStatePacket(packet: MinimapStatePacket) {
+    lastMinimapState = packet
+    miniMapRadarView.setMinimapState(packet)
+    val normalizedAsset = packet.asset.trim()
+    if (normalizedAsset.isNotEmpty()) {
+      currentMinimapAssetPath = "minimap_tiles/$normalizedAsset"
+      if (!updateMiniMapCompositeTexture(force = false)) {
+        updateMiniMapTexture()
+      }
+    }
+    logVerbose("minimap_state zone=${packet.zone} tile=${packet.tile} asset=${packet.asset} wx=${packet.playerWx} wy=${packet.playerWy}")
+    Log.d(logTag, "minimap_state zone=${packet.zone} tile=${packet.tile} asset=${packet.asset} ts=${packet.ts}")
+  }
+
+  private fun updateMiniMapTexture() {
+    val assetPath = currentMinimapAssetPath ?: run {
+      miniMapRadarView.setMiniMapBitmap(null)
+      return
+    }
+    val bmp = loadBitmapCached(assetPath)
+    miniMapRadarView.setMiniMapBitmap(bmp)
+  }
+
+  private fun updateMiniMapCompositeTexture(force: Boolean = false): Boolean {
+    val state = lastMinimapState ?: return false
+    val zonePrefix = minimapZonePrefix(state) ?: return false
+    val centerX = state.tileX
+    val centerY = state.tileY
+    val key = "$zonePrefix:$centerX:$centerY"
+    if (!force && key == currentMinimapCompositeKey) {
+      return true
+    }
+
+    val tiles = arrayOfNulls<Bitmap>(9)
+    var any = false
+    var tileW = 0
+    var tileH = 0
+    var idx = 0
+    for (dy in -1..1) {
+      for (dx in -1..1) {
+        val tx = centerX + dx
+        val ty = centerY + dy
+        val path = "minimap_tiles/${zonePrefix}_map${tx}_${ty}.png"
+        val bmp = loadBitmapCached(path)
+        tiles[idx++] = bmp
+        if (bmp != null && !bmp.isRecycled) {
+          any = true
+          if (tileW <= 0 || tileH <= 0) {
+            tileW = bmp.width
+            tileH = bmp.height
+          }
+        }
+      }
+    }
+    if (!any || tileW <= 0 || tileH <= 0) {
+      return false
+    }
+
+    val out = Bitmap.createBitmap(tileW * 3, tileH * 3, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(out)
+    idx = 0
+    for (row in 0 until 3) {
+      for (col in 0 until 3) {
+        val bmp = tiles[idx++]
+        if (bmp == null || bmp.isRecycled) continue
+        val dx = col * tileW
+        val dy = row * tileH
+        canvas.drawBitmap(bmp, null, Rect(dx, dy, dx + tileW, dy + tileH), null)
+      }
+    }
+
+    miniMapRadarView.setMiniMapComposite(out, centerX - 1, centerY - 1)
+    currentMinimapCompositeKey = key
+    return true
+  }
+
+  private fun minimapZonePrefix(packet: MinimapStatePacket): String? {
+    val asset = packet.asset.trim()
+    if (asset.isNotEmpty()) {
+      val idx = asset.indexOf("_map", ignoreCase = true)
+      if (idx > 0) {
+        return asset.substring(0, idx)
+      }
+    }
+    val zone = packet.zone.trim()
+    if (zone.isEmpty()) return null
+    return zone
+  }
+
   private fun refreshDebugPanel() {
     val p = lastPos
     val o = lastOverlay
+    val q = lastQuestMarkers
+    val ql = lastQuestLog
     val b = lastBag
+    val e = lastEquip
+    val rs = lastResourceScan
+    val ms = lastMinimapState
     val now = System.currentTimeMillis()
     val overlayAge = if (o != null && o.ts > 0L) (now - o.ts).coerceAtLeast(0L) else -1L
+    val questAge = if (q != null && q.ts > 0L) (now - q.ts).coerceAtLeast(0L) else -1L
+    val questLogAge = if (ql != null && ql.ts > 0L) (now - ql.ts).coerceAtLeast(0L) else -1L
     val bagAge = if (b != null && b.ts > 0L) (now - b.ts).coerceAtLeast(0L) else -1L
+    val equipAge = if (e != null && e.ts > 0L) (now - e.ts).coerceAtLeast(0L) else -1L
 
     val facingSrc = p?.facingSrc?.ifBlank { "none" } ?: "none"
     val imeLine = if (p == null) {
@@ -398,8 +795,77 @@ class MainActivity : ComponentActivity() {
         "bag rev=${b.rev} items=${b.itemCount} rx=${b.items.size} age=${age}ms"
       }
     }
-    val text = "facing_src=$facingSrc\n$overlayLine\n$bagLine\n$imeLine"
+    val equipLine = if (e == null) {
+      t("equip=waiting", "equip=等待中")
+    } else {
+      val age = if (equipAge >= 0) equipAge else 0
+      if (uiLang == UiLang.ZH) {
+        "equip 总槽位=${e.count} 已装备=${e.equippedCount} 黄=${e.yellowCount} 红=${e.redCount} 延迟=${age}ms"
+      } else {
+        "equip slots=${e.count} equipped=${e.equippedCount} yellow=${e.yellowCount} red=${e.redCount} age=${age}ms"
+      }
+    }
+    val resourceLine = if (rs == null) {
+      t("resource=waiting", "resource=等待中")
+    } else {
+      val nearest = rs.nodes.firstOrNull()
+      if (uiLang == UiLang.ZH) {
+        "resource count=${rs.count}/${rs.scanned} 最近=${nearest?.name ?: "-"}"
+      } else {
+        "resource count=${rs.count}/${rs.scanned} nearest=${nearest?.name ?: "-"}"
+      }
+    }
+    val minimapLine = if (ms == null) {
+      t("minimap_state=waiting", "minimap_state=等待中")
+    } else {
+      if (uiLang == UiLang.ZH) {
+        "minimap_state tile=${ms.tile} 资源=${ms.asset} wx=${"%.1f".format(ms.playerWx ?: 0f)} wy=${"%.1f".format(ms.playerWy ?: 0f)}"
+      } else {
+        "minimap_state tile=${ms.tile} asset=${ms.asset} wx=${"%.1f".format(ms.playerWx ?: 0f)} wy=${"%.1f".format(ms.playerWy ?: 0f)}"
+      }
+    }
+    val questLine = if (q == null) {
+      t("quest=waiting", "quest=等待中")
+    } else {
+      val age = if (questAge >= 0) questAge else 0
+      if (uiLang == UiLang.ZH) {
+        "quest=${q.map.ifBlank { q.zone }}/${q.zone} 数量=${q.count} 接收=${q.markers.size} 延迟=${age}ms"
+      } else {
+        "quest=${q.map.ifBlank { q.zone }}/${q.zone} count=${q.count} rx=${q.markers.size} age=${age}ms"
+      }
+    }
+    val questLogLine = if (ql == null) {
+      t("questlog=waiting", "questlog=等待中")
+    } else {
+      val age = if (questLogAge >= 0) questLogAge else 0
+      if (uiLang == UiLang.ZH) {
+        "questlog count=${ql.count} rx=${ql.entries.size} 延迟=${age}ms"
+      } else {
+        "questlog count=${ql.count} rx=${ql.entries.size} age=${age}ms"
+      }
+    }
+    val text = "facing_src=$facingSrc\n$overlayLine\n$questLine\n$questLogLine\n$bagLine\n$equipLine\n$resourceLine\n$minimapLine\n$imeLine"
     debugStatusText.text = text
+  }
+
+  private fun updateVisibleQuestMarkers() {
+    val p = lastPos
+    val q = lastQuestMarkers
+    if (p == null || q == null) {
+      visibleQuestMarkers = emptyList()
+      mapView.setQuestMarkers(emptyList(), focusedQuestId)
+      return
+    }
+
+    val posMap = slug(p.map)
+    val posZone = slug(p.zone)
+    val markMap = slug(q.map)
+    val markZone = slug(q.zone)
+    val matches = (posMap.isNotEmpty() && (posMap == markMap || posMap == markZone)) ||
+      (posZone.isNotEmpty() && (posZone == markMap || posZone == markZone))
+
+    visibleQuestMarkers = if (matches) q.markers else emptyList()
+    mapView.setQuestMarkers(visibleQuestMarkers, focusedQuestId)
   }
 
   private fun switchPage(page: Page) {
@@ -407,12 +873,14 @@ class MainActivity : ComponentActivity() {
     prefs.edit().putInt("current_page", page.ordinal).apply()
 
     pageMap.visibility = if (page == Page.MAP) View.VISIBLE else View.GONE
+    pageCharacter.visibility = if (page == Page.CHARACTER) View.VISIBLE else View.GONE
     pageBag.visibility = if (page == Page.BAG) View.VISIBLE else View.GONE
     pageIme.visibility = if (page == Page.IME) View.VISIBLE else View.GONE
     pageDebug.visibility = if (page == Page.DEBUG) View.VISIBLE else View.GONE
     pageConfig.visibility = if (page == Page.CONFIG) View.VISIBLE else View.GONE
 
     navMapBtn.isSelected = page == Page.MAP
+    navCharBtn.isSelected = page == Page.CHARACTER
     navBagBtn.isSelected = page == Page.BAG
     navImeBtn.isSelected = page == Page.IME
     navDebugBtn.isSelected = page == Page.DEBUG
@@ -422,16 +890,19 @@ class MainActivity : ComponentActivity() {
     if (page == Page.IME) {
       showImeKeyboard()
     }
+    refreshMiniMapRenderState()
   }
 
   private fun applyNavLabels() {
     val map = t("MAP", "地图")
+    val char = t("CHAR", "角色")
     val bag = t("BAG", "背包")
     val ime = "IME"
     val debug = t("DEBUG", "调试")
     val config = t("CONFIG", "设置")
 
     navMapBtn.text = map
+    navCharBtn.text = char
     navBagBtn.text = bag
     navImeBtn.text = ime
     navDebugBtn.text = debug
@@ -455,6 +926,11 @@ class MainActivity : ComponentActivity() {
     imeInput.hint = t("Type text here...", "在这里输入文本...")
     imeInsertBtn.text = t("Insert", "插入")
     imeSendBtn.text = t("Insert + Send", "插入并发送")
+    characterStatsTitle.text = t("STATS", "属性")
+    characterDetailTitle.text = t("EQUIPMENT DETAIL", "装备详情")
+    updateDebugControls()
+    updateCharacterStatsPanel()
+    applyMapModeLabels()
     applyNavLabels()
 
     connStateText.text = if (connected) {
@@ -465,14 +941,54 @@ class MainActivity : ComponentActivity() {
     val p = lastPos
     if (p != null) {
       updateMapStatus(p)
-      updatePlayerPanel(p)
     } else {
       statusText.text = t("Map: waiting data", "地图: 等待数据")
-      updatePlayerPanel(null)
     }
     updateBagFilterButtons()
     updateBagPanel(lastBag)
+    updateEquipPanel(lastEquip)
+    updateQuestPanel()
     refreshDebugPanel()
+    refreshDebugLogView()
+  }
+
+  private fun applyMapModeLabels() {
+    mapModeMiniBtn.text = "MINI"
+    mapModeWorldBtn.text = "WORLD"
+  }
+
+  private fun switchMapDisplayMode(mode: MapDisplayMode) {
+    if (currentMapMode == mode) return
+    currentMapMode = mode
+    prefs.edit().putString("map_mode", if (mode == MapDisplayMode.MINI) "mini" else "world").apply()
+    updateMapDisplayModeUi()
+  }
+
+  private fun updateMapDisplayModeUi() {
+    val world = currentMapMode == MapDisplayMode.WORLD
+    mapView.visibility = if (world) View.VISIBLE else View.GONE
+    miniMapRadarView.visibility = if (world) View.GONE else View.VISIBLE
+    mapModeWorldBtn.isSelected = world
+    mapModeMiniBtn.isSelected = !world
+    if (!world) {
+      updateMiniMapTexture()
+    }
+    refreshMiniMapRenderState()
+  }
+
+  private fun refreshMiniMapRenderState() {
+    val active = connected && currentPage == Page.MAP && currentMapMode == MapDisplayMode.MINI
+    miniMapRadarView.setRenderActive(active)
+  }
+
+  private fun updateDebugControls() {
+    debugVerboseBtn.text = if (debugVerboseEnabled) {
+      t("Verbose ON", "详细 开")
+    } else {
+      t("Verbose OFF", "详细 关")
+    }
+    debugVerboseBtn.isSelected = debugVerboseEnabled
+    debugClearBtn.text = t("Clear", "清空")
   }
 
   private fun statusConnectedText(ip: String, port: Int): String {
@@ -483,9 +999,15 @@ class MainActivity : ComponentActivity() {
     return if (uiLang == UiLang.ZH) zh else en
   }
 
+  private fun dp(value: Int): Int {
+    val px = value * resources.displayMetrics.density
+    return px.toInt().coerceAtLeast(1)
+  }
+
   private fun pageLabel(page: Page): String {
     return when (page) {
       Page.MAP -> t("Map", "地图")
+      Page.CHARACTER -> t("Character", "角色")
       Page.BAG -> t("Bag", "背包")
       Page.IME -> "IME"
       Page.DEBUG -> t("Debug", "调试")
@@ -501,27 +1023,454 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  private fun updatePlayerPanel(p: PosPacket?) {
-    playerPanelTitle.text = t("PLAYER", "角色")
-    playerNameLabel.text = t("Name", "名称")
-    playerLevelLabel.text = t("Level", "等级")
-    playerHpLabel.text = "HP"
-    playerZoneLabel.text = t("Zone", "区域")
-    playerCoordsLabel.text = t("Coords", "坐标")
+  private fun onQuestRowTapped(row: QuestTrackerRow) {
+    selectedQuestId = row.questId.takeIf { it > 0 }
+    selectedQuestTitle = row.title
+    currentQuestPanelMode = QuestPanelMode.DETAIL
+    focusedQuestId = selectedQuestId
+    updateQuestPanel()
+    updateVisibleQuestMarkers()
+  }
 
-    if (p == null) {
-      playerNameValue.text = "-"
-      playerLevelValue.text = "-"
-      playerHpValue.text = "-"
-      playerZoneValue.text = "-"
-      playerCoordsValue.text = "-"
+  private fun onQuestMarkerTapped(marker: QuestMarker) {
+    val packet = lastQuestLog
+    if (packet == null || packet.entries.isEmpty()) return
+    var entry = packet.entries.firstOrNull { marker.questId > 0 && it.questId == marker.questId }
+    if (entry == null && marker.title.isNotBlank()) {
+      entry = packet.entries.firstOrNull { it.title == marker.title }
+    }
+    if (entry == null) return
+    selectedQuestId = entry.questId.takeIf { it > 0 }
+    selectedQuestTitle = entry.title
+    currentQuestPanelMode = QuestPanelMode.DETAIL
+    focusedQuestId = selectedQuestId
+    updateQuestPanel()
+    updateVisibleQuestMarkers()
+  }
+
+  private fun updateQuestPanel() {
+    questPanelTitle.text = t("QUEST TRACKER", "任务追踪")
+    questModeTrackerBtn.text = t("TRACKER", "追踪")
+    questModeDetailBtn.text = t("DETAIL", "详情")
+    questDetailBackBtn.text = t("Back", "返回")
+
+    questRows = buildQuestRows()
+    questAdapter.submitRows(questRows)
+    questAdapter.setSelectedQuest(selectedQuestId)
+
+    val hasSelection = selectedQuestId != null || !selectedQuestTitle.isNullOrBlank()
+    if (currentQuestPanelMode == QuestPanelMode.DETAIL && !hasSelection) {
+      currentQuestPanelMode = QuestPanelMode.TRACKER
+    }
+    val inDetail = currentQuestPanelMode == QuestPanelMode.DETAIL
+    questTrackerList.visibility = if (inDetail) View.GONE else View.VISIBLE
+    questDetailScroll.visibility = if (inDetail) View.VISIBLE else View.GONE
+    questModeTrackerBtn.isSelected = !inDetail
+    questModeDetailBtn.isSelected = inDetail
+
+    if (!inDetail) return
+
+    val entry = findQuestEntryBySelection()
+    if (entry == null) {
+      questDetailTitle.text = t("No quest selected", "未选择任务")
+      questDetailTitle.setTextColor(Color.parseColor("#F4E6C8"))
+      questDetailLevel.text = t("Level: -", "等级: -")
+      questDetailProgress.text = t("Progress: -", "进度: -")
+      questDetailObjectives.text = "-"
+      questDetailMeta.text = t("Tap a tracker item or map marker.", "点击任务条目或地图标记查看详情。")
+      questDetailFocusBtn.text = t("Focus", "聚焦")
       return
     }
-    playerNameValue.text = p.player
-    playerLevelValue.text = p.level.toString()
-    playerHpValue.text = "${p.hp}/${p.hpMax}"
-    playerZoneValue.text = p.zone
-    playerCoordsValue.text = "x=${"%.3f".format(p.x)} y=${"%.3f".format(p.y)}"
+
+    val done = entry.objectives.count { it.done }
+    val total = entry.objectives.size
+    val progress = if (total <= 0) t("No objectives", "无目标") else "$done/$total"
+    val status = if (entry.complete) t("Ready to turn in", "可交付") else t("In progress", "进行中")
+
+    questDetailTitle.text = entry.title
+    questDetailTitle.setTextColor(questDifficultyColor(entry.level))
+    questDetailLevel.text = if (entry.level > 0) {
+      if (uiLang == UiLang.ZH) "等级: ${entry.level}" else "Level: ${entry.level}"
+    } else {
+      if (uiLang == UiLang.ZH) "等级: -" else "Level: -"
+    }
+    questDetailProgress.text = if (uiLang == UiLang.ZH) "进度: $progress · $status" else "Progress: $progress · $status"
+    questDetailObjectives.text = if (entry.objectives.isEmpty()) {
+      t("No objective text.", "没有目标文本。")
+    } else {
+      entry.objectives.joinToString("\n") { o ->
+        val bullet = if (o.done) "✓" else "•"
+        "$bullet ${o.text}"
+      }
+    }
+    val markerCount = visibleMarkerCountForQuest(entry.questId, entry.title)
+    questDetailMeta.text = if (uiLang == UiLang.ZH) {
+      "QuestID=${entry.questId} · Marker=${markerCount}"
+    } else {
+      "QuestID=${entry.questId} · Markers=${markerCount}"
+    }
+
+    val focused = (entry.questId > 0 && focusedQuestId == entry.questId)
+    questDetailFocusBtn.text = if (focused) t("Clear Focus", "取消聚焦") else t("Focus", "聚焦")
+  }
+
+  private fun visibleMarkerCountForQuest(questId: Int, title: String): Int {
+    val markers = visibleQuestMarkers
+    return markers.count { m ->
+      (questId > 0 && m.questId == questId) || (questId <= 0 && title.isNotBlank() && m.title == title)
+    }
+  }
+
+  private fun findQuestEntryBySelection(): QuestLogEntry? {
+    val packet = lastQuestLog ?: return null
+    val id = selectedQuestId
+    if (id != null && id > 0) {
+      packet.entries.firstOrNull { it.questId == id }?.let { return it }
+    }
+    val title = selectedQuestTitle
+    if (!title.isNullOrBlank()) {
+      packet.entries.firstOrNull { it.title == title }?.let { return it }
+    }
+    return null
+  }
+
+  private fun buildQuestRows(): List<QuestTrackerRow> {
+    val packet = lastQuestLog ?: return emptyList()
+    if (packet.entries.isEmpty()) return emptyList()
+    val visible = visibleQuestMarkers
+    val markerCountByQuestId = HashMap<Int, Int>()
+    val markerCountByTitle = HashMap<String, Int>()
+    for (m in visible) {
+      if (m.questId > 0) {
+        markerCountByQuestId[m.questId] = (markerCountByQuestId[m.questId] ?: 0) + 1
+      } else if (m.title.isNotBlank()) {
+        markerCountByTitle[m.title] = (markerCountByTitle[m.title] ?: 0) + 1
+      }
+    }
+
+    val rows = ArrayList<QuestTrackerRow>(packet.entries.size)
+    for (entry in packet.entries) {
+      val done = entry.objectives.count { it.done }
+      val total = entry.objectives.size
+      val progress = if (total <= 0) "-" else "$done/$total"
+      val markerCount = if (entry.questId > 0) {
+        markerCountByQuestId[entry.questId] ?: 0
+      } else {
+        markerCountByTitle[entry.title] ?: 0
+      }
+      val status = if (entry.complete) t("turn-in", "可交") else t("active", "进行中")
+      val levelText = if (entry.level > 0) "${entry.level}" else "?"
+      val meta = if (uiLang == UiLang.ZH) {
+        "Lv$levelText · 进度 $progress · 标记 $markerCount · $status"
+      } else {
+        "Lv$levelText · $progress · markers $markerCount · $status"
+      }
+      rows.add(
+        QuestTrackerRow(
+          questId = entry.questId,
+          title = entry.title,
+          meta = meta,
+          complete = entry.complete,
+          titleColor = questDifficultyColor(entry.level)
+        )
+      )
+    }
+
+    rows.sortWith(
+      compareBy<QuestTrackerRow> { if (it.complete) 1 else 0 }
+        .thenBy { it.title }
+    )
+    return rows
+  }
+
+  private fun questDifficultyColor(questLevel: Int): Int {
+    val playerLevel = (lastPos?.level ?: 0).coerceAtLeast(1)
+    val level = questLevel.coerceAtLeast(1)
+    val delta = level - playerLevel
+    return when {
+      delta >= 5 -> Color.parseColor("#FF4040") // red
+      delta >= 3 -> Color.parseColor("#FF8040") // orange
+      delta >= -2 -> Color.parseColor("#FFD100") // yellow
+      delta >= -6 -> Color.parseColor("#40C840") // green
+      else -> Color.parseColor("#A0A0A0") // gray
+    }
+  }
+
+  private fun updateEquipPanel(packet: EquipPacket?) {
+    if (packet == null) {
+      characterPaperDoll.setItems(emptyList())
+      characterPaperDoll.setSelectedSlot(null)
+      updateCharacterStatsPanel()
+      characterDetailName.text = t("No slot selected", "未选择槽位")
+      characterDetailBody.text = t("Tap a slot around the character to view details.", "点击角色周围的装备槽查看详情。")
+      characterDetailIcon.setImageResource(R.drawable.bag_slot_placeholder)
+      applyDetailIconFrameBorder(Color.parseColor("#6B5536"), 1)
+      return
+    }
+
+    val visibleItems = packet.items.filter { CHARACTER_VISIBLE_SLOT_SET.contains(it.slot) }
+    probeEquipEmptyTextures(visibleItems)
+    characterPaperDoll.setItems(visibleItems)
+    if (selectedEquipSlot.isNullOrBlank() || !CHARACTER_VISIBLE_SLOT_SET.contains(selectedEquipSlot)) {
+      selectedEquipSlot = visibleItems.firstOrNull { it.equipped }?.slot ?: "HeadSlot"
+    }
+    val selected = visibleItems.firstOrNull { it.slot == selectedEquipSlot }
+    characterPaperDoll.setSelectedSlot(selectedEquipSlot)
+    updateEquipDetailPanel(selectedEquipSlot ?: "", selected)
+
+    updateCharacterStatsPanel()
+  }
+
+  private fun updateCharacterStatsPanel() {
+    val packet = lastCharStats
+    if (packet == null || packet.rows.isEmpty()) {
+      characterStatsBody.text = if (uiLang == UiLang.ZH) {
+        "等待 BetterCharacterStats 推送..."
+      } else {
+        "Waiting BetterCharacterStats feed..."
+      }
+      return
+    }
+
+    val rows = packet.rows
+      .filter { it.label.isNotBlank() && it.value.isNotBlank() }
+    if (rows.isEmpty()) {
+      characterStatsBody.text = if (uiLang == UiLang.ZH) {
+        "等待 BetterCharacterStats 推送..."
+      } else {
+        "Waiting BetterCharacterStats feed..."
+      }
+      return
+    }
+    characterStatsBody.text = rows.joinToString("\n") { "${it.label}: ${it.value}" }
+  }
+
+  private fun onEquipSlotTapped(slot: String, item: EquipItem?) {
+    selectedEquipSlot = slot
+    characterPaperDoll.setSelectedSlot(slot)
+    updateEquipDetailPanel(slot, item)
+  }
+
+  private fun onCharacterFrameTapped() {
+    val c = client
+    if (c == null) {
+      log(t("autorun toggle skipped: not connected", "切换自动跑步失败: 未连接"))
+      return
+    }
+    c.sendAutoRunToggle()
+    log(t("autorun toggle requested (NumLock)", "已请求切换自动跑步 (NumLock)"))
+  }
+
+  private fun updateEquipDetailPanel(slot: String, item: EquipItem?) {
+    val slotLabel = formatEquipSlotName(slot)
+    if (item == null || !item.equipped) {
+      characterDetailName.text = t("Empty", "空槽")
+      characterDetailName.setTextColor(Color.parseColor("#C7B28A"))
+      characterDetailBody.text = if (uiLang == UiLang.ZH) {
+        "槽位: $slotLabel\n未装备物品"
+      } else {
+        "Slot: $slotLabel\nNo item equipped"
+      }
+      bindEquipIcon(characterDetailIcon, slot, item)
+      applyDetailIconFrameBorder(Color.parseColor("#6B5536"), 1)
+      return
+    }
+
+    val qualityName = qualityName(item.quality)
+    val durabilityLine = if (item.durabilityPct >= 0) {
+      if (uiLang == UiLang.ZH) {
+        "耐久: ${item.durabilityCur}/${item.durabilityMax} (${item.durabilityPct}%)"
+      } else {
+        "Durability: ${item.durabilityCur}/${item.durabilityMax} (${item.durabilityPct}%)"
+      }
+    } else {
+      t("Durability: N/A", "耐久: 无")
+    }
+    val classLine = buildClassLabelFromEquip(item)
+    val equipLoc = item.equipLoc?.takeIf { it.isNotBlank() } ?: "-"
+    val statsLine = formatEquipStats(item.stats)
+    characterDetailName.text = item.name?.takeIf { it.isNotBlank() } ?: "Item #${item.itemId}"
+    characterDetailName.setTextColor(qualityTextColor(item.quality))
+    characterDetailBody.text = if (uiLang == UiLang.ZH) {
+      "槽位: $slotLabel\n品质: $qualityName\n类型: $classLine\n装备位: $equipLoc\n$durabilityLine\nItem ID: ${item.itemId}\n属性:\n$statsLine"
+    } else {
+      "Slot: $slotLabel\nQuality: $qualityName\nType: $classLine\nEquipLoc: $equipLoc\n$durabilityLine\nItem ID: ${item.itemId}\nStats:\n$statsLine"
+    }
+    bindEquipIcon(characterDetailIcon, slot, item)
+    applyDetailIconFrameBorder(qualityTextColor(item.quality), 2)
+  }
+
+  private fun applyDetailIconFrameBorder(color: Int, widthDp: Int) {
+    characterDetailIconFrame.background = GradientDrawable().apply {
+      shape = GradientDrawable.RECTANGLE
+      cornerRadius = dp(5).toFloat()
+      setColor(Color.parseColor("#1A130E"))
+      setStroke(dp(widthDp.coerceAtLeast(1)), color)
+    }
+  }
+
+  private fun bindEquipIcon(imageView: ImageView, slot: String, item: EquipItem?) {
+    val fallbackUi = defaultEmptyTextureForSlot(slot)
+    val bmp = when {
+      item == null -> {
+        loadUiTextureBitmap(fallbackUi)
+      }
+      item.equipped -> loadBagIconBitmap(item.iconTex)
+      else -> {
+        val preferred = item.emptyTex
+        loadUiTextureBitmap(preferred)
+          ?: loadUiTextureBitmap(fallbackUi)
+      }
+    }
+    if (bmp != null && !bmp.isRecycled) {
+      imageView.setImageBitmap(bmp)
+    } else {
+      imageView.setImageResource(R.drawable.bag_slot_placeholder)
+    }
+  }
+
+  private fun formatEquipSlotName(slot: String): String {
+    return when (slot.uppercase(Locale.US)) {
+      "HEADSLOT" -> t("Head", "头部")
+      "NECKSLOT" -> t("Neck", "颈部")
+      "SHOULDERSLOT" -> t("Shoulder", "肩部")
+      "BACKSLOT" -> t("Back", "披风")
+      "CHESTSLOT" -> t("Chest", "胸部")
+      "SHIRTSLOT" -> t("Shirt", "衬衣")
+      "TABARDSLOT" -> t("Tabard", "战袍")
+      "WRISTSLOT" -> t("Wrist", "护腕")
+      "HANDSSLOT" -> t("Hands", "手部")
+      "WAISTSLOT" -> t("Waist", "腰部")
+      "LEGSSLOT" -> t("Legs", "腿部")
+      "FEETSLOT" -> t("Feet", "脚部")
+      "FINGER0SLOT" -> t("Ring 1", "戒指1")
+      "FINGER1SLOT" -> t("Ring 2", "戒指2")
+      "TRINKET0SLOT" -> t("Trinket 1", "饰品1")
+      "TRINKET1SLOT" -> t("Trinket 2", "饰品2")
+      "MAINHANDSLOT" -> t("Main Hand", "主手")
+      "SECONDARYHANDSLOT" -> t("Off Hand", "副手")
+      "RANGEDSLOT" -> t("Ranged", "远程")
+      "AMMOSLOT" -> t("Ammo", "弹药")
+      else -> slot
+    }
+  }
+
+  private fun defaultEmptyTextureForSlot(slot: String): String {
+    val stem = when (slot.uppercase(Locale.US)) {
+      "HEADSLOT" -> "UI-PaperDoll-Slot-Head"
+      "NECKSLOT" -> "UI-PaperDoll-Slot-Neck"
+      "SHOULDERSLOT" -> "UI-PaperDoll-Slot-Shoulder"
+      "SHIRTSLOT" -> "UI-PaperDoll-Slot-Shirt"
+      "CHESTSLOT" -> "UI-PaperDoll-Slot-Chest"
+      "WAISTSLOT" -> "UI-PaperDoll-Slot-Waist"
+      "LEGSSLOT" -> "UI-PaperDoll-Slot-Legs"
+      "FEETSLOT" -> "UI-PaperDoll-Slot-Feet"
+      "WRISTSLOT" -> "UI-PaperDoll-Slot-Wrists"
+      "HANDSSLOT" -> "UI-PaperDoll-Slot-Hands"
+      "FINGER0SLOT", "FINGER1SLOT" -> "UI-PaperDoll-Slot-Finger"
+      "TRINKET0SLOT", "TRINKET1SLOT" -> "UI-PaperDoll-Slot-Trinket"
+      "BACKSLOT" -> "UI-PaperDoll-Slot-Chest"
+      "MAINHANDSLOT" -> "UI-PaperDoll-Slot-MainHand"
+      "SECONDARYHANDSLOT" -> "UI-PaperDoll-Slot-SecondaryHand"
+      "RANGEDSLOT" -> "UI-PaperDoll-Slot-Ranged"
+      "AMMOSLOT" -> "UI-PaperDoll-Slot-Ammo"
+      "TABARDSLOT" -> "UI-PaperDoll-Slot-Tabard"
+      else -> "UI-PaperDoll-Slot-Head"
+    }
+    return "Interface/PaperDoll/$stem"
+  }
+
+  private fun buildClassLabelFromEquip(item: EquipItem): String {
+    val cls = item.itemClass?.trim().orEmpty()
+    val sub = item.itemSubClass?.trim().orEmpty()
+    return when {
+      cls.isNotEmpty() && sub.isNotEmpty() -> "$cls / $sub"
+      cls.isNotEmpty() -> cls
+      sub.isNotEmpty() -> sub
+      else -> "-"
+    }
+  }
+
+  private fun qualityName(quality: Int): String {
+    return when (quality) {
+      0 -> t("Poor", "粗糙")
+      1 -> t("Common", "普通")
+      2 -> t("Uncommon", "优秀")
+      3 -> t("Rare", "精良")
+      4 -> t("Epic", "史诗")
+      5 -> t("Legendary", "传说")
+      else -> t("Unknown", "未知")
+    }
+  }
+
+  private fun qualityTextColor(quality: Int): Int {
+    return when {
+      quality >= 5 -> Color.parseColor("#FF8000")
+      quality == 4 -> Color.parseColor("#A335EE")
+      quality == 3 -> Color.parseColor("#0070DD")
+      quality == 2 -> Color.parseColor("#1EFF00")
+      quality == 1 -> Color.parseColor("#FFFFFF")
+      else -> Color.parseColor("#9D9D9D")
+    }
+  }
+
+  private fun formatEquipStats(stats: Map<String, Int>): String {
+    if (stats.isEmpty()) {
+      return t("-", "-")
+    }
+    val lines = ArrayList<String>(stats.size)
+    for ((key, value) in stats.toSortedMap()) {
+      if (value == 0) continue
+      val label = statLabel(key)
+      val sign = if (value > 0) "+" else ""
+      lines.add("$label $sign$value")
+    }
+    return if (lines.isEmpty()) t("-", "-") else lines.joinToString("\n")
+  }
+
+  private fun statLabel(key: String): String {
+    val normalized = key.uppercase(Locale.US)
+    val mapped = when (normalized) {
+      "ITEM_MOD_STRENGTH_SHORT" -> t("Strength", "力量")
+      "ITEM_MOD_AGILITY_SHORT" -> t("Agility", "敏捷")
+      "ITEM_MOD_STAMINA_SHORT" -> t("Stamina", "耐力")
+      "ITEM_MOD_INTELLECT_SHORT" -> t("Intellect", "智力")
+      "ITEM_MOD_SPIRIT_SHORT" -> t("Spirit", "精神")
+      "ITEM_MOD_ARMOR_SHORT" -> t("Armor", "护甲")
+      "ITEM_MOD_ATTACK_POWER_SHORT" -> t("Attack Power", "攻击强度")
+      "ITEM_MOD_RANGED_ATTACK_POWER_SHORT" -> t("Ranged AP", "远程攻强")
+      "ITEM_MOD_SPELL_POWER_SHORT" -> t("Spell Power", "法术强度")
+      "ITEM_MOD_SPELL_HEALING_DONE_SHORT" -> t("Healing", "治疗效果")
+      "ITEM_MOD_HEALTH_SHORT" -> t("Health", "生命")
+      "ITEM_MOD_MANA_SHORT" -> t("Mana", "法力")
+      "ITEM_MOD_DEFENSE_SKILL_RATING_SHORT" -> t("Defense", "防御等级")
+      "STR" -> t("Strength", "力量")
+      "AGI" -> t("Agility", "敏捷")
+      "STA" -> t("Stamina", "耐力")
+      "INT" -> t("Intellect", "智力")
+      "SPI" -> t("Spirit", "精神")
+      "ARMOR" -> t("Armor", "护甲")
+      "AP" -> t("Attack Power", "攻击强度")
+      "RANGEDAP" -> t("Ranged AP", "远程攻强")
+      "SPELLDMG", "DMG" -> t("Spell Power", "法术强度")
+      "HEAL" -> t("Healing", "治疗效果")
+      "HP" -> t("Health", "生命")
+      "MANA" -> t("Mana", "法力")
+      else -> null
+    }
+    if (mapped != null) return mapped
+
+    val compact = normalized
+      .removePrefix("ITEM_MOD_")
+      .removeSuffix("_SHORT")
+      .replace('_', ' ')
+      .trim()
+    return if (compact.isEmpty()) key else compact.lowercase(Locale.US)
+      .split(' ')
+      .filter { it.isNotBlank() }
+      .joinToString(" ") { part ->
+        part.replaceFirstChar { ch -> if (ch.isLowerCase()) ch.titlecase(Locale.US) else ch.toString() }
+      }
   }
 
   private fun setBagFilter(filter: BagFilter) {
@@ -857,10 +1806,118 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  private fun normalizeUiTexturePath(texturePath: String?): String? {
+    if (texturePath.isNullOrBlank()) return null
+    var p = texturePath.trim().replace('\\', '/')
+    if (p.startsWith("interface/", ignoreCase = true)) {
+      p = p.substring("interface/".length)
+    }
+    if (p.startsWith("/")) p = p.removePrefix("/")
+    if (!p.contains('/')) {
+      if (p.startsWith("UI-PaperDoll-Slot-", ignoreCase = true)) {
+        p = "PaperDoll/$p"
+      }
+    }
+    if (p.isBlank()) return null
+    p = when {
+      p.endsWith(".png", ignoreCase = true) -> p
+      p.endsWith(".blp", ignoreCase = true) -> p.dropLast(4) + ".png"
+      else -> "$p.png"
+    }
+    return p
+  }
+
+  private fun probeEquipEmptyTextures(items: List<EquipItem>) {
+    for (item in items) {
+      if (item.equipped) continue
+      val raw = item.emptyTex?.trim().orEmpty()
+      val normalized = normalizeUiTexturePath(raw)
+      val key = "${item.slot}|$raw|${normalized.orEmpty()}"
+      if (!equipEmptyProbeLogged.add(key)) continue
+      val msg = "equip_empty_probe slot=${item.slot} empty_tex=${if (raw.isBlank()) "<empty>" else raw} normalized=${normalized ?: "<nil>"}"
+      Log.i(logTag, msg)
+      log(msg)
+    }
+  }
+
+  private fun uiTextureCacheFileName(normalizedPath: String): String {
+    return normalizedPath.lowercase(Locale.US).replace('/', '_').replace('\\', '_')
+  }
+
+  private fun loadUiTextureBitmap(texturePath: String?): Bitmap? {
+    val normalized = normalizeUiTexturePath(texturePath) ?: return null
+    val key = "ui/$normalized"
+    val cached = uiTextureBitmapCache[key]
+    if (cached != null && !cached.isRecycled) {
+      return cached
+    }
+
+    val cacheFile = File(uiTextureCacheDir, uiTextureCacheFileName(normalized))
+    val fromDisk = if (cacheFile.exists()) {
+      runCatching { BitmapFactory.decodeFile(cacheFile.absolutePath) }.getOrNull()
+    } else null
+    if (fromDisk != null) {
+      uiTextureBitmapCache[key] = fromDisk
+      trimUiTextureCache()
+      return fromDisk
+    }
+
+    scheduleUiTextureFetch(normalized)
+    return null
+  }
+
+  private fun scheduleUiTextureFetch(normalizedPath: String) {
+    if (!pendingUiTextureFetch.add(normalizedPath)) return
+    if (!connected || currentHost.isBlank() || !remoteUiTexturesAvailable) {
+      pendingUiTextureFetch.remove(normalizedPath)
+      return
+    }
+
+    lifecycleScope.launch(Dispatchers.IO) {
+      val bytes = AssetBridgeClient.requestFile(
+        host = currentHost,
+        root = "ui_textures",
+        path = normalizedPath,
+        port = currentAssetPort
+      )
+      var ok = false
+      if (bytes != null && bytes.isNotEmpty()) {
+        val cacheFile = File(uiTextureCacheDir, uiTextureCacheFileName(normalizedPath))
+        ok = runCatching {
+          cacheFile.parentFile?.mkdirs()
+          cacheFile.writeBytes(bytes)
+          true
+        }.getOrDefault(false)
+      }
+
+      withContext(Dispatchers.Main) {
+        pendingUiTextureFetch.remove(normalizedPath)
+        if (!ok) {
+          if (uiTextureMissLogged.add(normalizedPath)) {
+            val msg = "ui_texture_miss path=$normalizedPath"
+            Log.w(logTag, msg)
+            log(msg)
+          }
+          return@withContext
+        }
+        if (lastEquip != null) {
+          updateEquipPanel(lastEquip)
+        }
+      }
+    }
+  }
+
   private fun trimBagIconCache(maxEntries: Int = 256) {
     while (bagIconBitmapCache.size > maxEntries) {
       val first = bagIconBitmapCache.entries.firstOrNull() ?: break
       bagIconBitmapCache.remove(first.key)
+    }
+  }
+
+  private fun trimUiTextureCache(maxEntries: Int = 192) {
+    while (uiTextureBitmapCache.size > maxEntries) {
+      val first = uiTextureBitmapCache.entries.firstOrNull() ?: break
+      uiTextureBitmapCache.remove(first.key)
     }
   }
 
@@ -922,6 +1979,7 @@ class MainActivity : ComponentActivity() {
         if (remoteIndex != null) break
         remoteAssetsAvailable = false
         remoteIconsAvailable = false
+        remoteUiTexturesAvailable = false
         Log.w(logTag, "asset tcp unavailable host=$host port=$port attempt=$attempt")
         delay(1200)
       }
@@ -939,6 +1997,7 @@ class MainActivity : ComponentActivity() {
     val manifest = AssetBridgeClient.requestManifest(host, port) ?: return null
     val tileAvailable = manifest.roots["worldmap_tiles"] == true
     val iconsAvailable = manifest.roots["icons"] == true
+    val uiTexturesAvailable = manifest.roots["ui_textures"] == true
     if (!tileAvailable) return null
 
     val tileDirs = if (tileAvailable) {
@@ -952,7 +2011,7 @@ class MainActivity : ComponentActivity() {
       emptyList()
     }
 
-    return RemoteMapIndex(tileDirs = tileDirs, iconsAvailable = iconsAvailable)
+    return RemoteMapIndex(tileDirs = tileDirs, iconsAvailable = iconsAvailable, uiTexturesAvailable = uiTexturesAvailable)
   }
 
   private fun applyRemoteMapIndex(index: RemoteMapIndex) {
@@ -968,6 +2027,7 @@ class MainActivity : ComponentActivity() {
     }
     remoteAssetsAvailable = index.tileDirs.isNotEmpty()
     remoteIconsAvailable = index.iconsAvailable
+    remoteUiTexturesAvailable = index.uiTexturesAvailable
     if (remoteAssetsAvailable) {
       log("asset tcp indexed: +$addedTiles tiles")
     }
@@ -1220,9 +2280,16 @@ class MainActivity : ComponentActivity() {
         pendingAssetFetch.remove(assetPath)
         if (ok) {
           logMapSource(assetPath, "tcp")
-          val p = lastPos
-          if (p != null) {
-            ensureMapLoaded(p.map, p.zone)
+          if (assetPath.startsWith("minimap_tiles/", ignoreCase = true)) {
+            val composed = updateMiniMapCompositeTexture(force = true)
+            if (!composed && assetPath.equals(currentMinimapAssetPath, ignoreCase = true)) {
+              updateMiniMapTexture()
+            }
+          } else {
+            val p = lastPos
+            if (p != null) {
+              ensureMapLoaded(p.map, p.zone)
+            }
           }
         }
       }
@@ -1249,19 +2316,56 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun isMapAssetPath(assetPath: String): Boolean {
-    return assetPath.startsWith("worldmap_", ignoreCase = true)
+    return assetPath.startsWith("worldmap_", ignoreCase = true) ||
+      assetPath.startsWith("minimap_", ignoreCase = true)
   }
 
   private fun slug(s: String): String {
     return s.replace(Regex("[^A-Za-z0-9]"), "").uppercase(Locale.US)
   }
 
+  private fun logVerbose(message: String) {
+    appendDebugLog(message, verbose = true)
+  }
+
   private fun log(message: String) {
+    appendDebugLog(message, verbose = false)
+  }
+
+  private fun appendDebugLog(message: String, verbose: Boolean) {
+    val msg = message.trim()
+    if (msg.isEmpty()) return
+
     val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-    val line = "[$ts] $message\n"
-    val existing = logText.text?.toString().orEmpty()
-    val merged = existing + line
-    logText.text = if (merged.length > 7000) merged.takeLast(7000) else merged
+    val last = debugLogBuffer.peekLast()
+    if (last != null && last.message == msg && last.verbose == verbose) {
+      last.count += 1
+      last.ts = ts
+    } else {
+      debugLogBuffer.addLast(DebugLogEntry(ts = ts, message = msg, verbose = verbose, count = 1))
+      while (debugLogBuffer.size > DEBUG_LOG_MAX_LINES) {
+        debugLogBuffer.removeFirst()
+      }
+    }
+    refreshDebugLogView()
+  }
+
+  private fun refreshDebugLogView() {
+    if (!::logText.isInitialized) return
+    if (debugLogBuffer.isEmpty()) {
+      logText.text = ""
+      return
+    }
+    val sb = StringBuilder(8192)
+    for (entry in debugLogBuffer) {
+      if (entry.verbose && !debugVerboseEnabled) continue
+      sb.append('[').append(entry.ts).append("] ").append(entry.message)
+      if (entry.count > 1) {
+        sb.append(" (x").append(entry.count).append(')')
+      }
+      sb.append('\n')
+    }
+    logText.text = sb.toString()
   }
 
   private fun showImeKeyboard() {

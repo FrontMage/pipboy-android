@@ -14,6 +14,7 @@ import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
 import java.util.Base64
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
 class UdpBridgeClient(
@@ -21,7 +22,14 @@ class UdpBridgeClient(
   private val port: Int,
   private val onPos: (PosPacket) -> Unit,
   private val onOverlay: (OverlayPacket) -> Unit,
+  private val onQuestMarkers: (QuestMarkersPacket) -> Unit,
+  private val onQuestLog: (QuestLogPacket) -> Unit,
   private val onBag: (BagPacket) -> Unit,
+  private val onEquip: (EquipPacket) -> Unit,
+  private val onCharStats: (CharacterStatsPacket) -> Unit,
+  private val onResourceScan: (ResourceScanPacket) -> Unit,
+  private val onMinimapKey: (MinimapKeyPacket) -> Unit,
+  private val onMinimapState: (MinimapStatePacket) -> Unit,
   private val onAck: (String) -> Unit,
   private val onLog: (String) -> Unit
 ) {
@@ -31,6 +39,7 @@ class UdpBridgeClient(
   @Volatile private var addressRef: InetAddress? = null
   private val imeSeq = AtomicLong(1L)
   private val itemUseSeq = AtomicLong(1L)
+  private val hotkeySeq = AtomicLong(1L)
 
   fun start(scope: CoroutineScope) {
     if (job != null) return
@@ -49,7 +58,7 @@ class UdpBridgeClient(
         while (isActive) {
           val now = System.currentTimeMillis()
           if (now - lastHelloMs >= 2000L) {
-            sendJson(socket, address, port, "{\"type\":\"hello\",\"proto\":1,\"client\":\"pipboy-android\",\"want\":\"pos,overlay,bag\"}")
+            sendJson(socket, address, port, "{\"type\":\"hello\",\"proto\":1,\"client\":\"pipboy-android\",\"want\":\"pos,overlay,quest,questlog,bag,equip,charstats,gobj,minimap_key,minimap_state\"}")
             lastHelloMs = now
           }
 
@@ -158,6 +167,38 @@ class UdpBridgeClient(
     }
   }
 
+  fun sendAutoRunToggle() {
+    val scope = ioScope ?: run {
+      onLog("autorun toggle skipped: client offline")
+      return
+    }
+    val socket = socketRef ?: run {
+      onLog("autorun toggle skipped: socket unavailable")
+      return
+    }
+    val address = addressRef ?: run {
+      onLog("autorun toggle skipped: address unavailable")
+      return
+    }
+
+    val seq = hotkeySeq.getAndIncrement()
+    val payload = JSONObject()
+      .put("type", "hotkey")
+      .put("proto", 1)
+      .put("client", "pipboy-android")
+      .put("seq", seq)
+      .put("vk", 0x90) // VK_NUMLOCK
+      .toString()
+
+    scope.launch(Dispatchers.IO) {
+      try {
+        sendJson(socket, address, port, payload)
+      } catch (t: Throwable) {
+        onLog("autorun toggle send error: ${t.message}")
+      }
+    }
+  }
+
   private fun sendJson(socket: DatagramSocket, addr: InetAddress, port: Int, text: String) {
     val bytes = text.toByteArray(StandardCharsets.UTF_8)
     val packet = DatagramPacket(bytes, bytes.size, addr, port)
@@ -228,6 +269,70 @@ class UdpBridgeClient(
         )
       }
 
+      "quest_markers_sync" -> {
+        val arr = obj.optJSONArray("markers") ?: JSONArray()
+        val markers = ArrayList<QuestMarker>(arr.length())
+        for (i in 0 until arr.length()) {
+          val m = arr.optJSONObject(i) ?: continue
+          markers.add(
+            QuestMarker(
+              x = m.optDouble("x", 0.0).toFloat().coerceIn(0f, 1f),
+              y = m.optDouble("y", 0.0).toFloat().coerceIn(0f, 1f),
+              title = m.optString("title", ""),
+              questId = m.optInt("questid", 0),
+              qtype = m.optString("qtype", "").ifBlank { null },
+              icon = m.optString("icon", "").ifBlank { null },
+              layer = m.optInt("layer", 0),
+              cluster = m.optInt("cluster", 0) != 0 || m.optBoolean("cluster", false)
+            )
+          )
+        }
+        onQuestMarkers(
+          QuestMarkersPacket(
+            ts = obj.optLong("ts", 0L),
+            map = obj.optString("map", ""),
+            zone = obj.optString("zone", ""),
+            mapId = obj.optInt("map_id", 0),
+            count = obj.optInt("count", markers.size),
+            markers = markers
+          )
+        )
+      }
+
+      "quest_log_sync" -> {
+        val arr = obj.optJSONArray("entries") ?: JSONArray()
+        val entries = ArrayList<QuestLogEntry>(arr.length())
+        for (i in 0 until arr.length()) {
+          val e = arr.optJSONObject(i) ?: continue
+          val objectiveArr = e.optJSONArray("objectives") ?: JSONArray()
+          val objectives = ArrayList<QuestObjective>(objectiveArr.length())
+          for (j in 0 until objectiveArr.length()) {
+            val o = objectiveArr.optJSONObject(j) ?: continue
+            val objectiveText = o.optString("text", "")
+            val done = o.optInt("done", 0) != 0 || o.optBoolean("done", false)
+            objectives.add(QuestObjective(text = objectiveText, done = done))
+          }
+          entries.add(
+            QuestLogEntry(
+              questId = e.optInt("questid", 0),
+              qlogId = e.optInt("qlogid", 0),
+              title = e.optString("title", ""),
+              level = e.optInt("level", 0),
+              watched = e.optInt("watched", 0) != 0 || e.optBoolean("watched", false),
+              complete = e.optInt("complete", 0) != 0 || e.optBoolean("complete", false),
+              objectives = objectives
+            )
+          )
+        }
+        onQuestLog(
+          QuestLogPacket(
+            ts = obj.optLong("ts", 0L),
+            count = obj.optInt("count", entries.size),
+            entries = entries
+          )
+        )
+      }
+
       "bag_sync" -> {
         val arr = obj.optJSONArray("items") ?: JSONArray()
         val items = ArrayList<BagItem>(arr.length())
@@ -261,6 +366,148 @@ class UdpBridgeClient(
         )
       }
 
+      "equip_sync" -> {
+        val arr = obj.optJSONArray("items") ?: JSONArray()
+        val items = ArrayList<EquipItem>(arr.length())
+        for (i in 0 until arr.length()) {
+          val it = arr.optJSONObject(i) ?: continue
+          val statsObj = it.optJSONObject("stats")
+          val stats = LinkedHashMap<String, Int>()
+          if (statsObj != null) {
+            val keys = statsObj.keys()
+            while (keys.hasNext()) {
+              val key = keys.next()
+              val value = runCatching { statsObj.optInt(key, 0) }.getOrDefault(0)
+              stats[key] = value
+            }
+          }
+          items.add(
+            EquipItem(
+              slot = it.optString("slot", ""),
+              slotId = it.optInt("slot_id", 0),
+              equipped = it.optInt("equipped", 0) != 0 || it.optBoolean("equipped", false),
+              itemId = it.optInt("item_id", 0),
+              emptyTex = it.optString("empty_tex", "").ifBlank { null },
+              iconTex = it.optString("icon_tex", "").ifBlank { null },
+              link = it.optString("link", "").ifBlank { null },
+              name = it.optString("name", "").ifBlank { null },
+              quality = it.optInt("quality", 0),
+              itemClass = it.optString("item_class", "").ifBlank { null },
+              itemSubClass = it.optString("item_subclass", "").ifBlank { null },
+              equipLoc = it.optString("equip_loc", "").ifBlank { null },
+              durabilityCur = it.optInt("durability_cur", -1),
+              durabilityMax = it.optInt("durability_max", -1),
+              durabilityPct = it.optInt("durability_pct", -1),
+              warn = it.optString("warn", "").ifBlank { null },
+              stats = stats
+            )
+          )
+        }
+        onEquip(
+          EquipPacket(
+            ts = obj.optLong("ts", 0L),
+            count = obj.optInt("count", items.size),
+            equippedCount = obj.optInt("equipped_count", items.count { e -> e.equipped }),
+            yellowCount = obj.optInt("yellow_count", 0),
+            redCount = obj.optInt("red_count", 0),
+            items = items
+          )
+        )
+      }
+
+      "char_stats_sync" -> {
+        val arr = obj.optJSONArray("rows") ?: JSONArray()
+        val rows = ArrayList<CharacterStatRow>(arr.length())
+        for (i in 0 until arr.length()) {
+          val it = arr.optJSONObject(i) ?: continue
+          rows.add(
+            CharacterStatRow(
+              key = it.optString("k", ""),
+              label = it.optString("label", ""),
+              value = it.optString("v", "")
+            )
+          )
+        }
+        onCharStats(
+          CharacterStatsPacket(
+            ts = obj.optLong("ts", 0L),
+            count = obj.optInt("count", rows.size),
+            rows = rows
+          )
+        )
+      }
+
+      "gobj_scan" -> {
+        val arr = obj.optJSONArray("nodes") ?: JSONArray()
+        val nodes = ArrayList<ResourceBlip>(arr.length())
+        for (i in 0 until arr.length()) {
+          val it = arr.optJSONObject(i) ?: continue
+          nodes.add(
+            ResourceBlip(
+              entry = it.optInt("entry", 0),
+              goType = it.optInt("go_type", 0),
+              x = it.optDouble("x", 0.0).toFloat(),
+              y = it.optDouble("y", 0.0).toFloat(),
+              z = it.optDouble("z", 0.0).toFloat(),
+              facing = it.optNullableFloat("facing"),
+              kind = it.optString("resource_kind", "").ifBlank { null },
+              name = it.optString("resource_name", "").ifBlank { null },
+              skill = it.optInt("resource_skill", 0),
+              distMeters = it.optNullableFloat("dist_m")
+            )
+          )
+        }
+        onResourceScan(
+          ResourceScanPacket(
+            ts = obj.optLong("ts", 0L),
+            count = obj.optInt("count", nodes.size),
+            scanned = obj.optInt("scanned", 0),
+            playerWx = obj.optNullableFloat("player_wx"),
+            playerWy = obj.optNullableFloat("player_wy"),
+            nodes = nodes
+          )
+        )
+      }
+
+      "minimap_key" -> {
+        val zone = obj.optString("zone", "").trim()
+        val tile = obj.optString("tile", "").trim()
+        val asset = obj.optString("asset", "").trim()
+        if (zone.isNotEmpty() && tile.isNotEmpty() && asset.isNotEmpty()) {
+          onMinimapKey(
+            MinimapKeyPacket(
+              ts = obj.optLong("ts", 0L),
+              zone = zone,
+              tile = tile,
+              asset = asset,
+              src = obj.optString("src", "").ifBlank { null }
+            )
+          )
+        }
+      }
+
+      "minimap_state" -> {
+        val zone = obj.optString("zone", "").trim()
+        val tile = obj.optString("tile", "").trim()
+        val asset = obj.optString("asset", "").trim()
+        val tilePair = parseMinimapTile(tile)
+        if (zone.isNotEmpty() && tilePair != null) {
+          onMinimapState(
+            MinimapStatePacket(
+              ts = obj.optLong("ts", 0L),
+              zone = zone,
+              tile = tile,
+              tileX = tilePair.first,
+              tileY = tilePair.second,
+              asset = asset,
+              playerWx = obj.optNullableFloat("player_wx"),
+              playerWy = obj.optNullableFloat("player_wy"),
+              src = obj.optString("src", "").ifBlank { null }
+            )
+          )
+        }
+      }
+
       "ime_ack" -> {
         val seq = obj.optLong("seq", 0L)
         val ok = obj.optInt("ok", 0) != 0
@@ -274,8 +521,25 @@ class UdpBridgeClient(
         val slot = obj.optInt("slot", -1)
         onAck("item_use_ack seq=$seq ok=$ok bag=$bag slot=$slot")
       }
+
+      "hotkey_ack" -> {
+        val seq = obj.optLong("seq", 0L)
+        val ok = obj.optInt("ok", 0) != 0
+        val vk = obj.optInt("vk", 0)
+        onAck("hotkey_ack seq=$seq ok=$ok vk=$vk")
+      }
     }
   }
+}
+
+private fun parseMinimapTile(tile: String?): Pair<Int, Int>? {
+  val t = tile?.trim()?.lowercase(Locale.US) ?: return null
+  if (!t.startsWith("map")) return null
+  val under = t.indexOf('_')
+  if (under <= 3 || under >= t.length - 1) return null
+  val x = t.substring(3, under).toIntOrNull() ?: return null
+  val y = t.substring(under + 1).toIntOrNull() ?: return null
+  return x to y
 }
 
 private fun JSONObject.optNullableFloat(name: String): Float? {

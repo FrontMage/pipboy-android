@@ -9,7 +9,9 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.util.AttributeSet
+import android.view.MotionEvent
 import android.view.View
+import kotlin.math.max
 import kotlin.math.min
 
 class MapSurfaceView @JvmOverloads constructor(
@@ -24,7 +26,11 @@ class MapSurfaceView @JvmOverloads constructor(
 
   private var mapBitmap: Bitmap? = null
   private var pos: PosPacket? = null
+  private var questMarkers: List<QuestMarker> = emptyList()
+  private var focusQuestId: Int? = null
+  private var lastMapDst: RectF? = null
   private var mapLabel: String = ""
+  var onQuestMarkerTap: ((QuestMarker) -> Unit)? = null
 
   private val mapLogicalWidth = 1002f
   private val mapLogicalHeight = 668f
@@ -39,6 +45,29 @@ class MapSurfaceView @JvmOverloads constructor(
   private val markerBitmap: Bitmap? = runCatching {
     BitmapFactory.decodeResource(resources, R.drawable.player_arrow_green)
   }.getOrNull()
+  private val questMarkerPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+  private val questMarkerFallbackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = Color.argb(220, 255, 209, 92)
+    style = Paint.Style.FILL
+  }
+  private val questOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = Color.argb(220, 45, 25, 10)
+    style = Paint.Style.STROKE
+    strokeWidth = 2f
+  }
+  private val questMarkerBitmaps: Map<String, Bitmap?> = mapOf(
+    "available" to decodeQuestMarker(R.drawable.pb_pfq_available),
+    "available_c" to decodeQuestMarker(R.drawable.pb_pfq_available_c),
+    "complete" to decodeQuestMarker(R.drawable.pb_pfq_complete),
+    "complete_c" to decodeQuestMarker(R.drawable.pb_pfq_complete_c),
+    "cluster_mob" to decodeQuestMarker(R.drawable.pb_pfq_cluster_mob),
+    "cluster_item" to decodeQuestMarker(R.drawable.pb_pfq_cluster_item),
+    "cluster_misc" to decodeQuestMarker(R.drawable.pb_pfq_cluster_misc)
+  )
+
+  private fun decodeQuestMarker(resId: Int): Bitmap? {
+    return runCatching { BitmapFactory.decodeResource(resources, resId) }.getOrNull()
+  }
 
   fun setMap(bitmap: Bitmap?, label: String) {
     mapBitmap = bitmap
@@ -48,6 +77,12 @@ class MapSurfaceView @JvmOverloads constructor(
 
   fun setPosition(p: PosPacket?) {
     pos = p
+    invalidate()
+  }
+
+  fun setQuestMarkers(markers: List<QuestMarker>, focusedQuestId: Int?) {
+    questMarkers = markers
+    focusQuestId = focusedQuestId
     invalidate()
   }
 
@@ -81,7 +116,9 @@ class MapSurfaceView @JvmOverloads constructor(
 
     val srcRect = Rect(0, 0, srcW, srcH)
     canvas.drawBitmap(bmp, srcRect, dst, mapPaint)
+    lastMapDst = RectF(dst)
 
+    drawQuestMarkers(canvas, dst)
     drawMarker(canvas, dst)
 
     canvas.drawText(mapLabel, 16f, height - 20f, textPaint)
@@ -108,5 +145,83 @@ class MapSurfaceView @JvmOverloads constructor(
     canvas.rotate(angleDeg)
     canvas.drawBitmap(icon, null, iconDst, markerBitmapPaint)
     canvas.restore()
+  }
+
+  private fun drawQuestMarkers(canvas: Canvas, dst: RectF) {
+    if (questMarkers.isEmpty()) return
+
+    val iconSize = max(16f, min(dst.width(), dst.height()) * 0.034f)
+    val half = iconSize * 0.5f
+    val focusedQuest = focusQuestId ?: 0
+    val markerDst = RectF()
+
+    for (m in questMarkers) {
+      val x = dst.left + m.x * dst.width()
+      val y = dst.top + m.y * dst.height()
+      markerDst.set(x - half, y - half, x + half, y + half)
+      val faded = focusedQuest > 0 && m.questId > 0 && m.questId != focusedQuest
+      val alpha = if (faded) 85 else 255
+
+      val iconKey = (m.icon ?: "").lowercase()
+      val icon = questMarkerBitmaps[iconKey]
+      if (icon != null && !icon.isRecycled) {
+        questMarkerPaint.alpha = alpha
+        canvas.drawBitmap(icon, null, markerDst, questMarkerPaint)
+      } else {
+        questMarkerFallbackPaint.alpha = alpha
+        questOutlinePaint.alpha = alpha
+        canvas.drawCircle(x, y, half * 0.62f, questMarkerFallbackPaint)
+        canvas.drawCircle(x, y, half * 0.62f, questOutlinePaint)
+      }
+    }
+  }
+
+  override fun onTouchEvent(event: MotionEvent): Boolean {
+    when (event.actionMasked) {
+      MotionEvent.ACTION_DOWN -> {
+        // Claim touch stream so ACTION_UP is reliably delivered for tap hit-testing.
+        return true
+      }
+
+      MotionEvent.ACTION_UP -> {
+        val marker = findQuestMarkerAt(event.x, event.y)
+        if (marker != null) {
+          onQuestMarkerTap?.invoke(marker)
+          performClick()
+          return true
+        }
+      }
+    }
+    return super.onTouchEvent(event)
+  }
+
+  override fun performClick(): Boolean {
+    super.performClick()
+    return true
+  }
+
+  private fun findQuestMarkerAt(x: Float, y: Float): QuestMarker? {
+    val dst = lastMapDst ?: return null
+    if (x < dst.left || x > dst.right || y < dst.top || y > dst.bottom) return null
+    if (questMarkers.isEmpty()) return null
+    val iconSize = max(16f, min(dst.width(), dst.height()) * 0.034f)
+    val minTouchRadius = 24f * resources.displayMetrics.density
+    val radius = max(iconSize * 1.1f, minTouchRadius)
+    val radiusSq = radius * radius
+
+    var nearest: QuestMarker? = null
+    var nearestDist = Float.MAX_VALUE
+    for (m in questMarkers) {
+      val mx = dst.left + m.x * dst.width()
+      val my = dst.top + m.y * dst.height()
+      val dx = x - mx
+      val dy = y - my
+      val dist = dx * dx + dy * dy
+      if (dist <= radiusSq && dist < nearestDist) {
+        nearestDist = dist
+        nearest = m
+      }
+    }
+    return nearest
   }
 }

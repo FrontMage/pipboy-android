@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/questRowRoot"
+  android:layout_width="match_parent"
+  android:layout_height="wrap_content"
+  android:layout_marginBottom="6dp"
+  android:orientation="vertical"
+  android:padding="8dp"
+  android:background="@drawable/quest_row_bg">
+
+  <TextView
+    android:id="@+id/questRowTitle"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:maxLines="2"
+    android:textColor="#F4E6C8"
+    android:textSize="12sp"
+    android:textStyle="bold" />
+
+  <TextView
+    android:id="@+id/questRowMeta"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="4dp"
+    android:textColor="#D7BD8C"
+    android:textSize="11sp" />
+</LinearLayout>

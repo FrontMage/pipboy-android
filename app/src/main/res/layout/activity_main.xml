@@ -36,6 +36,18 @@
       android:text="MAP" />
 
     <Button
+      android:id="@+id/navCharBtn"
+      android:layout_width="match_parent"
+      android:layout_height="56dp"
+      android:layout_marginTop="8dp"
+      android:background="@drawable/nav_item_bg"
+      android:backgroundTint="@null"
+      android:textColor="@color/nav_item_text"
+      android:textAllCaps="true"
+      android:textStyle="bold"
+      android:text="CHAR" />
+
+    <Button
       android:id="@+id/navBagBtn"
       android:layout_width="match_parent"
       android:layout_height="56dp"
@@ -140,13 +152,46 @@
           android:layout_weight="1"
           android:orientation="vertical">
 
-          <TextView
-            android:id="@+id/statusText"
+          <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Idle"
-            android:textStyle="bold"
-            android:textColor="#E8D6B4" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+              android:id="@+id/statusText"
+              android:layout_width="0dp"
+              android:layout_height="wrap_content"
+              android:layout_weight="1"
+              android:text="Idle"
+              android:textStyle="bold"
+              android:textColor="#E8D6B4" />
+
+            <Button
+              android:id="@+id/mapModeMiniBtn"
+              android:layout_width="64dp"
+              android:layout_height="30dp"
+              android:layout_marginEnd="6dp"
+              android:background="@drawable/nav_item_bg"
+              android:backgroundTint="@null"
+              android:text="MINI"
+              android:textAllCaps="true"
+              android:textColor="@color/nav_item_text"
+              android:textSize="10sp"
+              android:textStyle="bold" />
+
+            <Button
+              android:id="@+id/mapModeWorldBtn"
+              android:layout_width="72dp"
+              android:layout_height="30dp"
+              android:background="@drawable/nav_item_bg"
+              android:backgroundTint="@null"
+              android:text="WORLD"
+              android:textAllCaps="true"
+              android:textColor="@color/nav_item_text"
+              android:textSize="10sp"
+              android:textStyle="bold" />
+          </LinearLayout>
 
           <FrameLayout
             android:layout_width="match_parent"
@@ -160,12 +205,18 @@
               android:layout_width="match_parent"
               android:layout_height="match_parent"
               android:background="#111111" />
+
+            <com.turtlewow.pipboy.MiniMapRadarView
+              android:id="@+id/miniMapRadarView"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:visibility="gone" />
           </FrameLayout>
         </LinearLayout>
 
         <LinearLayout
-          android:id="@+id/playerPanel"
-          android:layout_width="152dp"
+          android:id="@+id/questPanel"
+          android:layout_width="188dp"
           android:layout_height="match_parent"
           android:layout_marginStart="4dp"
           android:orientation="vertical"
@@ -173,103 +224,266 @@
           android:background="#2C2119">
 
           <TextView
-            android:id="@+id/playerPanelTitle"
+            android:id="@+id/questPanelTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="PLAYER"
+            android:text="QUEST TRACKER"
             android:textColor="#D7BD8C"
             android:textStyle="bold"
             android:textSize="12sp" />
 
-          <TextView
-            android:id="@+id/playerNameLabel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:text="Name"
-            android:textColor="#E7D3AD"
-            android:textSize="13sp" />
-
-          <TextView
-            android:id="@+id/playerNameValue"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="-"
-            android:textColor="#F4E6C8"
-            android:textStyle="bold"
-            android:textSize="20sp" />
-
-          <TextView
-            android:id="@+id/playerLevelLabel"
+          <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="Level"
-            android:textColor="#E7D3AD"
-            android:textSize="13sp" />
+            android:orientation="horizontal">
+
+            <Button
+              android:id="@+id/questModeTrackerBtn"
+              android:layout_width="0dp"
+              android:layout_height="32dp"
+              android:layout_weight="1"
+              android:background="@drawable/nav_item_bg"
+              android:backgroundTint="@null"
+              android:text="TRACKER"
+              android:textAllCaps="false"
+              android:textColor="@color/nav_item_text"
+              android:textSize="10sp"
+              android:textStyle="bold" />
+
+            <Button
+              android:id="@+id/questModeDetailBtn"
+              android:layout_width="0dp"
+              android:layout_height="32dp"
+              android:layout_weight="1"
+              android:layout_marginStart="6dp"
+              android:background="@drawable/nav_item_bg"
+              android:backgroundTint="@null"
+              android:text="DETAIL"
+              android:textAllCaps="false"
+              android:textColor="@color/nav_item_text"
+              android:textSize="10sp"
+              android:textStyle="bold" />
+          </LinearLayout>
+
+          <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/questTrackerList"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginTop="8dp"
+            android:clipToPadding="false"
+            android:paddingBottom="8dp"
+            android:scrollbars="vertical" />
+
+          <ScrollView
+            android:id="@+id/questDetailScroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginTop="8dp"
+            android:fillViewport="true"
+            android:scrollbars="vertical"
+            android:visibility="gone">
+
+            <LinearLayout
+              android:id="@+id/questDetailPanel"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:orientation="vertical"
+              android:padding="2dp">
+
+              <TextView
+                android:id="@+id/questDetailTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxLines="3"
+                android:text="-"
+                android:textColor="#F4E6C8"
+                android:textStyle="bold"
+                android:textSize="13sp" />
+
+              <TextView
+                android:id="@+id/questDetailLevel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="Level: -"
+                android:textColor="#D7BD8C"
+                android:textSize="11sp" />
+
+              <TextView
+                android:id="@+id/questDetailProgress"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Progress: -"
+                android:textColor="#D7BD8C"
+                android:textSize="11sp" />
+
+              <TextView
+                android:id="@+id/questDetailObjectives"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="-"
+                android:textColor="#E7D3AD"
+                android:textSize="11sp" />
+
+              <TextView
+                android:id="@+id/questDetailMeta"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="-"
+                android:textColor="#A88F69"
+                android:textSize="10sp" />
+
+              <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <Button
+                  android:id="@+id/questDetailFocusBtn"
+                  android:layout_width="0dp"
+                  android:layout_height="32dp"
+                  android:layout_weight="1"
+                  android:background="@drawable/nav_item_bg"
+                  android:backgroundTint="@null"
+                  android:text="Focus"
+                  android:textAllCaps="false"
+                  android:textColor="@color/nav_item_text"
+                  android:textSize="10sp"
+                  android:textStyle="bold" />
+
+                <Button
+                  android:id="@+id/questDetailBackBtn"
+                  android:layout_width="0dp"
+                  android:layout_height="32dp"
+                  android:layout_weight="1"
+                  android:layout_marginStart="6dp"
+                  android:background="@drawable/nav_item_bg"
+                  android:backgroundTint="@null"
+                  android:text="Back"
+                  android:textAllCaps="false"
+                  android:textColor="@color/nav_item_text"
+                  android:textSize="10sp"
+                  android:textStyle="bold" />
+              </LinearLayout>
+            </LinearLayout>
+          </ScrollView>
+        </LinearLayout>
+      </LinearLayout>
+
+      <LinearLayout
+        android:id="@+id/pageCharacter"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:visibility="gone">
+
+        <com.turtlewow.pipboy.CharacterPaperDollView
+          android:id="@+id/characterPaperDoll"
+          android:layout_width="0dp"
+          android:layout_height="match_parent"
+          android:layout_weight="2"
+          android:background="#15100D" />
+
+        <LinearLayout
+          android:id="@+id/characterStatsPanel"
+          android:layout_width="0dp"
+          android:layout_height="match_parent"
+          android:layout_weight="1"
+          android:layout_marginStart="8dp"
+          android:orientation="vertical"
+          android:background="#2C2119"
+          android:padding="8dp">
 
           <TextView
-            android:id="@+id/playerLevelValue"
+            android:id="@+id/characterStatsTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="-"
-            android:textColor="#F4E6C8"
+            android:text="STATS"
+            android:textColor="#D7BD8C"
             android:textStyle="bold"
-            android:textSize="22sp" />
+            android:textSize="12sp" />
+
+          <ScrollView
+            android:id="@+id/characterStatsScroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="6dp"
+            android:layout_weight="1"
+            android:scrollbars="vertical"
+            android:fadeScrollbars="false">
+
+            <TextView
+              android:id="@+id/characterStatsBody"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:textColor="#E7D3AD"
+              android:textSize="11sp"
+              android:text="Waiting stat plugin feed..." />
+          </ScrollView>
+        </LinearLayout>
+
+        <LinearLayout
+          android:id="@+id/characterDetailPanel"
+          android:layout_width="0dp"
+          android:layout_height="match_parent"
+          android:layout_weight="1"
+          android:layout_marginStart="8dp"
+          android:orientation="vertical"
+          android:background="#2C2119"
+          android:padding="8dp">
 
           <TextView
-            android:id="@+id/playerHpLabel"
+            android:id="@+id/characterDetailTitle"
             android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="EQUIPMENT DETAIL"
+            android:textColor="#D7BD8C"
+            android:textStyle="bold"
+            android:textSize="12sp" />
+
+          <com.turtlewow.pipboy.SquareFrameLayout
+            android:id="@+id/characterDetailIconFrame"
+            android:layout_width="86dp"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="HP"
-            android:textColor="#E7D3AD"
-            android:textSize="13sp" />
+            android:background="#1A130E"
+            android:padding="3dp">
+
+            <ImageView
+              android:id="@+id/characterDetailIcon"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:contentDescription="@null"
+              android:scaleType="centerCrop" />
+          </com.turtlewow.pipboy.SquareFrameLayout>
 
           <TextView
-            android:id="@+id/playerHpValue"
+            android:id="@+id/characterDetailName"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:maxLines="2"
             android:text="-"
             android:textColor="#F4E6C8"
             android:textStyle="bold"
-            android:textSize="18sp" />
+            android:textSize="12sp" />
 
           <TextView
-            android:id="@+id/playerZoneLabel"
+            android:id="@+id/characterDetailBody"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Zone"
-            android:textColor="#E7D3AD"
-            android:textSize="13sp" />
-
-          <TextView
-            android:id="@+id/playerZoneValue"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
             android:text="-"
-            android:textColor="#F4E6C8"
-            android:textStyle="bold"
-            android:textSize="16sp" />
-
-          <TextView
-            android:id="@+id/playerCoordsLabel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Coords"
             android:textColor="#E7D3AD"
-            android:textSize="13sp" />
-
-          <TextView
-            android:id="@+id/playerCoordsValue"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="-"
-            android:textColor="#F4E6C8"
-            android:textStyle="bold"
-            android:textSize="16sp" />
+            android:textSize="11sp" />
         </LinearLayout>
       </LinearLayout>
 
@@ -576,6 +790,40 @@
           android:textSize="12sp"
           android:typeface="monospace"
           android:text="debug: waiting packets" />
+
+        <LinearLayout
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginTop="6dp"
+          android:orientation="horizontal">
+
+          <Button
+            android:id="@+id/debugVerboseBtn"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_weight="1"
+            android:background="@drawable/nav_item_bg"
+            android:backgroundTint="@null"
+            android:text="Verbose OFF"
+            android:textAllCaps="false"
+            android:textColor="@color/nav_item_text"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+          <Button
+            android:id="@+id/debugClearBtn"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/nav_item_bg"
+            android:backgroundTint="@null"
+            android:text="Clear"
+            android:textAllCaps="false"
+            android:textColor="@color/nav_item_text"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+        </LinearLayout>
 
         <ScrollView
           android:layout_width="match_parent"
