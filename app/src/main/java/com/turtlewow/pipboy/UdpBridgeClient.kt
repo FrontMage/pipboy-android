@@ -294,6 +294,10 @@ class UdpBridgeClient(
             zone = obj.optString("zone", ""),
             mapId = obj.optInt("map_id", 0),
             count = obj.optInt("count", markers.size),
+            mapWidth = obj.optNullableFloat("map_w"),
+            mapHeight = obj.optNullableFloat("map_h"),
+            playerX = obj.optNullableFloat("player_x"),
+            playerY = obj.optNullableFloat("player_y"),
             markers = markers
           )
         )

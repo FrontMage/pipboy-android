@@ -535,6 +535,7 @@ class MainActivity : ComponentActivity() {
     buddyLastHp = -1
     buddyHurtUntilMs = 0L
     mapView.setQuestMarkers(emptyList(), null)
+    miniMapRadarView.setQuestMarkers(emptyList(), null, null, null)
     miniMapRadarView.setPosition(null)
     miniMapRadarView.setResourceScan(null)
     miniMapRadarView.setMiniMapComposite(null, null, null)
@@ -675,7 +676,6 @@ class MainActivity : ComponentActivity() {
       }
     }
     logVerbose("minimap_state zone=${packet.zone} tile=${packet.tile} asset=${packet.asset} wx=${packet.playerWx} wy=${packet.playerWy}")
-    Log.d(logTag, "minimap_state zone=${packet.zone} tile=${packet.tile} asset=${packet.asset} ts=${packet.ts}")
   }
 
   private fun updateMiniMapTexture() {
@@ -854,6 +854,7 @@ class MainActivity : ComponentActivity() {
     if (p == null || q == null) {
       visibleQuestMarkers = emptyList()
       mapView.setQuestMarkers(emptyList(), focusedQuestId)
+      miniMapRadarView.setQuestMarkers(emptyList(), focusedQuestId, null, null)
       return
     }
 
@@ -866,6 +867,12 @@ class MainActivity : ComponentActivity() {
 
     visibleQuestMarkers = if (matches) q.markers else emptyList()
     mapView.setQuestMarkers(visibleQuestMarkers, focusedQuestId)
+    miniMapRadarView.setQuestMarkers(
+      visibleQuestMarkers,
+      focusedQuestId,
+      q.mapWidth,
+      q.mapHeight
+    )
   }
 
   private fun switchPage(page: Page) {

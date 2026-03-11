@@ -50,6 +50,10 @@ data class QuestMarkersPacket(
   val zone: String,
   val mapId: Int,
   val count: Int,
+  val mapWidth: Float?,
+  val mapHeight: Float?,
+  val playerX: Float?,
+  val playerY: Float?,
   val markers: List<QuestMarker>
 )
 

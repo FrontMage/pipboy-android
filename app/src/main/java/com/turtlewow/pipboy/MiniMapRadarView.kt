@@ -40,6 +40,10 @@ class MiniMapRadarView @JvmOverloads constructor(
   private var miniMapBitmap: Bitmap? = null
   private var minimapTileX: Int? = null
   private var minimapTileY: Int? = null
+  private var questMarkers: List<QuestMarker> = emptyList()
+  private var focusQuestId: Int? = null
+  private var questMapWidth: Float? = null
+  private var questMapHeight: Float? = null
   private var rangeMeters: Float = 70f
   private var targetWx: Float? = null
   private var targetWy: Float? = null
@@ -88,6 +92,16 @@ class MiniMapRadarView @JvmOverloads constructor(
     color = Color.argb(112, 18, 12, 8)
     style = Paint.Style.FILL
   }
+  private val questMarkerPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+  private val questMarkerFallbackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = Color.argb(220, 255, 209, 92)
+    style = Paint.Style.FILL
+  }
+  private val questOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = Color.argb(220, 45, 25, 10)
+    style = Paint.Style.STROKE
+    strokeWidth = dp(1.2f)
+  }
   private val miniMapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     isFilterBitmap = true
   }
@@ -99,6 +113,19 @@ class MiniMapRadarView @JvmOverloads constructor(
   private val markerBitmap: Bitmap? = runCatching {
     BitmapFactory.decodeResource(resources, R.drawable.player_arrow_green)
   }.getOrNull()
+  private val questMarkerBitmaps: Map<String, Bitmap?> = mapOf(
+    "available" to decodeQuestMarker(R.drawable.pb_pfq_available),
+    "available_c" to decodeQuestMarker(R.drawable.pb_pfq_available_c),
+    "complete" to decodeQuestMarker(R.drawable.pb_pfq_complete),
+    "complete_c" to decodeQuestMarker(R.drawable.pb_pfq_complete_c),
+    "cluster_mob" to decodeQuestMarker(R.drawable.pb_pfq_cluster_mob),
+    "cluster_item" to decodeQuestMarker(R.drawable.pb_pfq_cluster_item),
+    "cluster_misc" to decodeQuestMarker(R.drawable.pb_pfq_cluster_misc)
+  )
+
+  private fun decodeQuestMarker(resId: Int): Bitmap? {
+    return runCatching { BitmapFactory.decodeResource(resources, resId) }.getOrNull()
+  }
 
   fun setPosition(packet: PosPacket?) {
     pos = packet
@@ -134,6 +161,19 @@ class MiniMapRadarView @JvmOverloads constructor(
       minimapTileY = packet.tileY
       setCameraTarget(packet.playerWx, packet.playerWy, instant = false)
     }
+    invalidate()
+  }
+
+  fun setQuestMarkers(
+    markers: List<QuestMarker>,
+    focusedQuestId: Int?,
+    mapWidth: Float?,
+    mapHeight: Float?
+  ) {
+    questMarkers = markers
+    focusQuestId = focusedQuestId
+    questMapWidth = mapWidth
+    questMapHeight = mapHeight
     invalidate()
   }
 
@@ -245,22 +285,22 @@ class MiniMapRadarView @JvmOverloads constructor(
     val s = scan
     val px = s?.playerWx
     val py = s?.playerWy
+    val tileX = minimapTileX
+    val tileY = minimapTileY
+    val src = srcRect
+    val useAbsoluteProjection = bmp != null &&
+      src != null &&
+      src.width() > 0 &&
+      src.height() > 0 &&
+      (
+        (hasComposite && compositeBaseX != null && compositeBaseY != null) ||
+          (tileX != null && tileY != null)
+        )
     if (s != null && px != null && py != null && s.nodes.isNotEmpty()) {
       val tileScale = (side * MINIMAP_ZOOM) / MINIMAP_TILE_WORLD_UNITS
       val half = side * 0.5f
       val fallbackScale = half / max(1f, rangeMeters)
       val dotR = dp(3.2f)
-      val tileX = minimapTileX
-      val tileY = minimapTileY
-      val src = srcRect
-      val useAbsoluteProjection = bmp != null &&
-        src != null &&
-        src.width() > 0 &&
-        src.height() > 0 &&
-        (
-          (hasComposite && compositeBaseX != null && compositeBaseY != null) ||
-            (tileX != null && tileY != null)
-          )
 
       for (node in s.nodes) {
         val point = if (useAbsoluteProjection) {
@@ -308,6 +348,96 @@ class MiniMapRadarView @JvmOverloads constructor(
       }
     } else {
       canvas.drawText("Radar waiting", rect.left + dp(6f), rect.top + dp(15f), labelPaint)
+    }
+
+    drawQuestMarkers(
+      canvas = canvas,
+      mapDst = mapDst,
+      bitmap = bmp,
+      srcRect = src,
+      useAbsoluteProjection = useAbsoluteProjection,
+      hasComposite = hasComposite,
+      compositeBaseX = compositeBaseX,
+      compositeBaseY = compositeBaseY,
+      tileX = tileX,
+      tileY = tileY,
+      playerWx = stateWx ?: scan?.playerWx,
+      playerWy = stateWy ?: scan?.playerWy
+    )
+  }
+
+  private fun drawQuestMarkers(
+    canvas: Canvas,
+    mapDst: RectF,
+    bitmap: Bitmap?,
+    srcRect: Rect?,
+    useAbsoluteProjection: Boolean,
+    hasComposite: Boolean,
+    compositeBaseX: Int?,
+    compositeBaseY: Int?,
+    tileX: Int?,
+    tileY: Int?,
+    playerWx: Float?,
+    playerWy: Float?
+  ) {
+    if (questMarkers.isEmpty()) return
+    val p = pos ?: return
+    val mapW = questMapWidth ?: return
+    val mapH = questMapHeight ?: return
+    if (mapW <= 0f || mapH <= 0f) return
+    // Always anchor to the latest live position packet. quest_markers_sync is not sent every
+    // frame, so packet-side player_x/player_y can become stale while moving and shift all markers.
+    val anchorX = p.x.coerceIn(0f, 1f)
+    val anchorY = p.y.coerceIn(0f, 1f)
+    val focusedQuest = focusQuestId ?: 0
+    val iconSize = dp(16f)
+    val half = iconSize * 0.5f
+    val markerDst = RectF()
+    val canProjectAbsolute = useAbsoluteProjection &&
+      bitmap != null &&
+      srcRect != null &&
+      playerWx != null &&
+      playerWy != null &&
+      (
+        (hasComposite && compositeBaseX != null && compositeBaseY != null) ||
+          (tileX != null && tileY != null)
+        )
+    for (m in questMarkers) {
+      val dxMap = m.x - anchorX
+      val dyMap = m.y - anchorY
+      if (!canProjectAbsolute) continue
+      val point = run {
+        val markerWx = playerWx!! - (dyMap * mapH)
+        val markerWy = playerWy!! - (dxMap * mapW)
+        val uv = if (hasComposite) {
+          worldToCompositePixel(markerWx, markerWy, compositeBaseX!!, compositeBaseY!!, bitmap!!)
+        } else {
+          worldToTilePixel(markerWx, markerWy, tileX!!, tileY!!, bitmap!!)
+        }
+        val sx = mapDst.left + ((uv.first - srcRect!!.left) / srcRect.width().toFloat()) * mapDst.width()
+        val sy = mapDst.top + ((uv.second - srcRect.top) / srcRect.height().toFloat()) * mapDst.height()
+        Pair(sx, sy)
+      }
+      val sx = point.first
+      val sy = point.second
+      if (sx < mapDst.left - half || sx > mapDst.right + half || sy < mapDst.top - half || sy > mapDst.bottom + half) {
+        continue
+      }
+
+      markerDst.set(sx - half, sy - half, sx + half, sy + half)
+      val faded = focusedQuest > 0 && m.questId > 0 && m.questId != focusedQuest
+      val alpha = if (faded) 85 else 255
+      val iconKey = (m.icon ?: "").lowercase(Locale.US)
+      val icon = questMarkerBitmaps[iconKey]
+      if (icon != null && !icon.isRecycled) {
+        questMarkerPaint.alpha = alpha
+        canvas.drawBitmap(icon, null, markerDst, questMarkerPaint)
+      } else {
+        questMarkerFallbackPaint.alpha = alpha
+        questOutlinePaint.alpha = alpha
+        canvas.drawCircle(sx, sy, half * 0.62f, questMarkerFallbackPaint)
+        canvas.drawCircle(sx, sy, half * 0.62f, questOutlinePaint)
+      }
     }
   }
 
