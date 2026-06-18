@@ -110,7 +110,7 @@ class MiniMapRadarView @JvmOverloads constructor(
     style = Paint.Style.FILL
   }
   private val markerBitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-  private val markerBitmap: Bitmap? = runCatching {
+  private var playerMarkerBitmap: Bitmap? = runCatching {
     BitmapFactory.decodeResource(resources, R.drawable.player_arrow_green)
   }.getOrNull()
   private val questMarkerBitmaps: Map<String, Bitmap?> = mapOf(
@@ -161,6 +161,12 @@ class MiniMapRadarView @JvmOverloads constructor(
       minimapTileY = packet.tileY
       setCameraTarget(packet.playerWx, packet.playerWy, instant = false)
     }
+    invalidate()
+  }
+
+  fun setPlayerMarkerBitmap(bitmap: Bitmap?) {
+    if (bitmap == null || bitmap.isRecycled) return
+    playerMarkerBitmap = bitmap
     invalidate()
   }
 
@@ -272,7 +278,7 @@ class MiniMapRadarView @JvmOverloads constructor(
 
     val rawFacingDeg = pos?.facingDeg ?: 0f
     val angleDeg = (-rawFacingDeg) + RADAR_FACING_OFFSET_DEG
-    markerBitmap?.let { icon ->
+    playerMarkerBitmap?.let { icon ->
       val r = side * PLAYER_ARROW_SCALE
       val iconDst = RectF(-r, -r, r, r)
       canvas.save()

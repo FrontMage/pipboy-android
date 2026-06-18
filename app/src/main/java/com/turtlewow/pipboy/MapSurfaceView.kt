@@ -42,7 +42,7 @@ class MapSurfaceView @JvmOverloads constructor(
   }
 
   private val markerBitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-  private val markerBitmap: Bitmap? = runCatching {
+  private var playerMarkerBitmap: Bitmap? = runCatching {
     BitmapFactory.decodeResource(resources, R.drawable.player_arrow_green)
   }.getOrNull()
   private val questMarkerPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -72,6 +72,12 @@ class MapSurfaceView @JvmOverloads constructor(
   fun setMap(bitmap: Bitmap?, label: String) {
     mapBitmap = bitmap
     mapLabel = label
+    invalidate()
+  }
+
+  fun setPlayerMarkerBitmap(bitmap: Bitmap?) {
+    if (bitmap == null || bitmap.isRecycled) return
+    playerMarkerBitmap = bitmap
     invalidate()
   }
 
@@ -133,7 +139,7 @@ class MapSurfaceView @JvmOverloads constructor(
 
     val rawFacingDeg = p.facingDeg ?: 0f
     val angleDeg = (-rawFacingDeg) + MARKER_FACING_OFFSET_DEG
-    val icon = markerBitmap
+    val icon = playerMarkerBitmap
     if (icon == null) return
 
     val iconHalfW = radius * 1.35f

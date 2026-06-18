@@ -75,6 +75,7 @@ class MainActivity : ComponentActivity() {
     private const val DEBUG_LOG_MAX_LINES = 500
     private const val BUDDY_MOVE_THRESHOLD = 0.00045f
     private const val BUDDY_HURT_FLASH_MS = 1300L
+    private const val PLAYER_MARKER_TEXTURE = "Interface/Minimap/MinimapArrow"
     private val CHARACTER_VISIBLE_SLOT_SET = setOf(
       "HeadSlot",
       "NeckSlot",
@@ -113,6 +114,7 @@ class MainActivity : ComponentActivity() {
   private lateinit var titleText: TextView
   private lateinit var connStateText: TextView
   private lateinit var statusText: TextView
+  private lateinit var questPanelToggleBtn: Button
   private lateinit var mapModeMiniBtn: Button
   private lateinit var mapModeWorldBtn: Button
   private lateinit var debugStatusText: TextView
@@ -122,6 +124,7 @@ class MainActivity : ComponentActivity() {
   private lateinit var mapView: MapSurfaceView
   private lateinit var miniMapRadarView: MiniMapRadarView
   private lateinit var pageMap: View
+  private lateinit var questPanel: View
   private lateinit var pageCharacter: View
   private lateinit var pageBag: View
   private lateinit var pageIme: View
@@ -200,6 +203,7 @@ class MainActivity : ComponentActivity() {
   private var currentBagFilter: BagFilter = BagFilter.ALL
   private var currentQuestPanelMode: QuestPanelMode = QuestPanelMode.TRACKER
   private var currentMapMode: MapDisplayMode = MapDisplayMode.WORLD
+  private var questPanelVisible = true
   private var currentBagItems: List<BagItem> = emptyList()
   private var selectedBagItem: BagItem? = null
   private var selectedQuestId: Int? = null
@@ -249,6 +253,7 @@ class MainActivity : ComponentActivity() {
     titleText = findViewById(R.id.titleText)
     connStateText = findViewById(R.id.connStateText)
     pageMap = findViewById(R.id.pageMap)
+    questPanel = findViewById(R.id.questPanel)
     pageCharacter = findViewById(R.id.pageCharacter)
     pageBag = findViewById(R.id.pageBag)
     pageIme = findViewById(R.id.pageIme)
@@ -300,6 +305,7 @@ class MainActivity : ComponentActivity() {
     connectBtn = findViewById(R.id.connectBtn)
     langBtn = findViewById(R.id.langBtn)
     statusText = findViewById(R.id.statusText)
+    questPanelToggleBtn = findViewById(R.id.questPanelToggleBtn)
     mapModeMiniBtn = findViewById(R.id.mapModeMiniBtn)
     mapModeWorldBtn = findViewById(R.id.mapModeWorldBtn)
     debugStatusText = findViewById(R.id.debugStatusText)
@@ -308,6 +314,7 @@ class MainActivity : ComponentActivity() {
     logText = findViewById(R.id.logText)
     mapView = findViewById(R.id.mapView)
     miniMapRadarView = findViewById(R.id.miniMapRadarView)
+    refreshPlayerMarkerTexture()
 
     ipInput.setText(prefs.getString("ip", "192.168.0.112"))
     portInput.setText(prefs.getInt("port", 38442).toString())
@@ -319,6 +326,7 @@ class MainActivity : ComponentActivity() {
       "mini" -> MapDisplayMode.MINI
       else -> MapDisplayMode.WORLD
     }
+    questPanelVisible = prefs.getBoolean("quest_panel_visible", true)
     debugVerboseEnabled = prefs.getBoolean("debug_verbose", false)
 
     connectBtn.setOnClickListener {
@@ -339,6 +347,7 @@ class MainActivity : ComponentActivity() {
     navImeBtn.setOnClickListener { switchPage(Page.IME) }
     navDebugBtn.setOnClickListener { switchPage(Page.DEBUG) }
     navConfigBtn.setOnClickListener { switchPage(Page.CONFIG) }
+    questPanelToggleBtn.setOnClickListener { setQuestPanelVisible(!questPanelVisible) }
     mapModeWorldBtn.setOnClickListener { switchMapDisplayMode(MapDisplayMode.WORLD) }
     mapModeMiniBtn.setOnClickListener { switchMapDisplayMode(MapDisplayMode.MINI) }
     debugVerboseBtn.setOnClickListener {
@@ -472,7 +481,7 @@ class MainActivity : ComponentActivity() {
     client = c
     connected = true
     connectBtn.text = t("Disconnect", "断开")
-    statusText.text = t("Map: waiting data", "地图: 等待数据")
+    statusText.text = t("Waiting map data", "等待地图数据")
     connStateText.text = statusConnectedText(ip, port)
     switchPage(Page.MAP)
     refreshRemoteMapIndex()
@@ -522,7 +531,7 @@ class MainActivity : ComponentActivity() {
     focusedQuestId = null
     questRows = emptyList()
     connectBtn.text = t("Connect", "连接")
-    statusText.text = t("Map: waiting data", "地图: 等待数据")
+    statusText.text = t("Waiting map data", "等待地图数据")
     connStateText.text = t("Idle", "空闲")
     val waiting = t("debug: waiting packets", "调试: 等待数据包")
     debugStatusText.text = waiting
@@ -893,7 +902,7 @@ class MainActivity : ComponentActivity() {
     navDebugBtn.isSelected = page == Page.DEBUG
     navConfigBtn.isSelected = page == Page.CONFIG
 
-    titleText.text = t("TurtleWoW Companion", "乌龟服伴侣") + " · " + pageLabel(page)
+    titleText.text = t("TurtleWoW", "乌龟服")
     if (page == Page.IME) {
       showImeKeyboard()
     }
@@ -905,8 +914,8 @@ class MainActivity : ComponentActivity() {
     val char = t("CHAR", "角色")
     val bag = t("BAG", "背包")
     val ime = "IME"
-    val debug = t("DEBUG", "调试")
-    val config = t("CONFIG", "设置")
+    val debug = t("DBG", "调试")
+    val config = t("CFG", "设置")
 
     navMapBtn.text = map
     navCharBtn.text = char
@@ -917,7 +926,7 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun applyLanguage() {
-    titleText.text = t("TurtleWoW Companion", "乌龟服伴侣") + " · " + pageLabel(currentPage)
+    titleText.text = t("TurtleWoW", "乌龟服")
     navHeaderText.text = t("Navigation", "导航")
     ipInput.hint = t("WoW IP", "WoW 地址")
     portInput.hint = t("Port", "端口")
@@ -949,7 +958,7 @@ class MainActivity : ComponentActivity() {
     if (p != null) {
       updateMapStatus(p)
     } else {
-      statusText.text = t("Map: waiting data", "地图: 等待数据")
+      statusText.text = t("Waiting map data", "等待地图数据")
     }
     updateBagFilterButtons()
     updateBagPanel(lastBag)
@@ -960,8 +969,10 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun applyMapModeLabels() {
+    questPanelToggleBtn.text = t("QUEST", "任务")
     mapModeMiniBtn.text = "MINI"
     mapModeWorldBtn.text = "WORLD"
+    updateQuestPanelVisibilityUi()
   }
 
   private fun switchMapDisplayMode(mode: MapDisplayMode) {
@@ -981,6 +992,17 @@ class MainActivity : ComponentActivity() {
       updateMiniMapTexture()
     }
     refreshMiniMapRenderState()
+  }
+
+  private fun setQuestPanelVisible(visible: Boolean) {
+    questPanelVisible = visible
+    prefs.edit().putBoolean("quest_panel_visible", visible).apply()
+    updateQuestPanelVisibilityUi()
+  }
+
+  private fun updateQuestPanelVisibilityUi() {
+    questPanel.visibility = if (questPanelVisible) View.VISIBLE else View.GONE
+    questPanelToggleBtn.isSelected = questPanelVisible
   }
 
   private fun refreshMiniMapRenderState() {
@@ -1056,7 +1078,7 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun updateQuestPanel() {
-    questPanelTitle.text = t("QUEST TRACKER", "任务追踪")
+    questPanelTitle.text = t("QUESTS", "任务")
     questModeTrackerBtn.text = t("TRACKER", "追踪")
     questModeDetailBtn.text = t("DETAIL", "详情")
     questDetailBackBtn.text = t("Back", "返回")
@@ -1907,6 +1929,7 @@ class MainActivity : ComponentActivity() {
           }
           return@withContext
         }
+        refreshPlayerMarkerTexture()
         if (lastEquip != null) {
           updateEquipPanel(lastEquip)
         }
@@ -2035,9 +2058,17 @@ class MainActivity : ComponentActivity() {
     remoteAssetsAvailable = index.tileDirs.isNotEmpty()
     remoteIconsAvailable = index.iconsAvailable
     remoteUiTexturesAvailable = index.uiTexturesAvailable
+    refreshPlayerMarkerTexture()
     if (remoteAssetsAvailable) {
       log("asset tcp indexed: +$addedTiles tiles")
     }
+  }
+
+  private fun refreshPlayerMarkerTexture() {
+    val bmp = loadUiTextureBitmap(PLAYER_MARKER_TEXTURE) ?: return
+    if (bmp.isRecycled) return
+    mapView.setPlayerMarkerBitmap(bmp)
+    miniMapRadarView.setPlayerMarkerBitmap(bmp)
   }
 
   private fun getZoneCatalog(dirName: String): ZoneTileCatalog? {

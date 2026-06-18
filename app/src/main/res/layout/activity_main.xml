@@ -8,10 +8,10 @@
 
   <LinearLayout
     android:id="@+id/sideNav"
-    android:layout_width="132dp"
+    android:layout_width="72dp"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="8dp"
+    android:padding="4dp"
     android:background="#2A1F18">
 
     <TextView
@@ -21,79 +21,86 @@
       android:text="NAVIGATION"
       android:textColor="#CCB081"
       android:textStyle="bold"
-      android:textSize="13sp" />
+      android:textSize="13sp"
+      android:visibility="gone" />
 
     <Button
       android:id="@+id/navMapBtn"
       android:layout_width="match_parent"
-      android:layout_height="56dp"
-      android:layout_marginTop="10dp"
+      android:layout_height="50dp"
+      android:layout_marginTop="4dp"
       android:background="@drawable/nav_item_bg"
       android:backgroundTint="@null"
       android:textColor="@color/nav_item_text"
       android:textAllCaps="true"
       android:textStyle="bold"
+      android:textSize="11sp"
       android:text="MAP" />
 
     <Button
       android:id="@+id/navCharBtn"
       android:layout_width="match_parent"
-      android:layout_height="56dp"
-      android:layout_marginTop="8dp"
+      android:layout_height="50dp"
+      android:layout_marginTop="6dp"
       android:background="@drawable/nav_item_bg"
       android:backgroundTint="@null"
       android:textColor="@color/nav_item_text"
       android:textAllCaps="true"
       android:textStyle="bold"
+      android:textSize="11sp"
       android:text="CHAR" />
 
     <Button
       android:id="@+id/navBagBtn"
       android:layout_width="match_parent"
-      android:layout_height="56dp"
-      android:layout_marginTop="8dp"
+      android:layout_height="50dp"
+      android:layout_marginTop="6dp"
       android:background="@drawable/nav_item_bg"
       android:backgroundTint="@null"
       android:textColor="@color/nav_item_text"
       android:textAllCaps="true"
       android:textStyle="bold"
+      android:textSize="11sp"
       android:text="BAG" />
 
     <Button
       android:id="@+id/navImeBtn"
       android:layout_width="match_parent"
-      android:layout_height="56dp"
-      android:layout_marginTop="8dp"
+      android:layout_height="50dp"
+      android:layout_marginTop="6dp"
       android:background="@drawable/nav_item_bg"
       android:backgroundTint="@null"
       android:textColor="@color/nav_item_text"
       android:textAllCaps="true"
       android:textStyle="bold"
+      android:textSize="11sp"
       android:text="IME" />
 
     <Button
       android:id="@+id/navDebugBtn"
       android:layout_width="match_parent"
-      android:layout_height="56dp"
-      android:layout_marginTop="8dp"
+      android:layout_height="50dp"
+      android:layout_marginTop="6dp"
       android:background="@drawable/nav_item_bg"
       android:backgroundTint="@null"
       android:textColor="@color/nav_item_text"
       android:textAllCaps="true"
       android:textStyle="bold"
-      android:text="DEBUG" />
+      android:textSize="11sp"
+      android:text="DBG" />
 
     <Button
       android:id="@+id/navConfigBtn"
       android:layout_width="match_parent"
-      android:layout_height="56dp"
-      android:layout_marginTop="8dp"
+      android:layout_height="50dp"
+      android:layout_marginTop="6dp"
       android:background="@drawable/nav_item_bg"
       android:backgroundTint="@null"
       android:textColor="@color/nav_item_text"
       android:textAllCaps="true"
       android:textStyle="bold"
-      android:text="CONFIG" />
+      android:textSize="11sp"
+      android:text="CFG" />
   </LinearLayout>
 
   <LinearLayout
@@ -102,7 +109,7 @@
     android:layout_height="match_parent"
     android:layout_weight="1"
     android:orientation="vertical"
-    android:padding="8dp">
+    android:padding="6dp">
 
     <LinearLayout
       android:layout_width="match_parent"
@@ -114,13 +121,29 @@
 
       <TextView
         android:id="@+id/titleText"
-        android:layout_width="0dp"
+        android:layout_width="150dp"
         android:layout_height="wrap_content"
-        android:layout_weight="1"
-        android:text="TurtleWoW Companion"
+        android:text="TurtleWoW"
         android:textColor="#E8D6B4"
         android:textStyle="bold"
-        android:textSize="18sp" />
+        android:textSize="16sp"
+        android:singleLine="true"
+        android:ellipsize="end" />
+
+      <TextView
+        android:id="@+id/statusText"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:text="Idle"
+        android:textColor="#E8D6B4"
+        android:textStyle="bold"
+        android:textSize="13sp"
+        android:singleLine="true"
+        android:ellipsize="end" />
 
       <TextView
         android:id="@+id/connStateText"
@@ -128,7 +151,9 @@
         android:layout_height="wrap_content"
         android:text="Idle"
         android:textColor="#D5BB8A"
-        android:textSize="13sp" />
+        android:textSize="13sp"
+        android:singleLine="true"
+        android:ellipsize="end" />
     </LinearLayout>
 
     <FrameLayout
@@ -136,7 +161,7 @@
       android:layout_width="match_parent"
       android:layout_height="0dp"
       android:layout_weight="1"
-      android:layout_marginTop="6dp"
+      android:layout_marginTop="4dp"
       android:background="#241A14">
 
       <LinearLayout
@@ -144,7 +169,7 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="horizontal"
-        android:padding="4dp">
+        android:padding="3dp">
 
         <LinearLayout
           android:layout_width="0dp"
@@ -152,52 +177,10 @@
           android:layout_weight="1"
           android:orientation="vertical">
 
-          <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <TextView
-              android:id="@+id/statusText"
-              android:layout_width="0dp"
-              android:layout_height="wrap_content"
-              android:layout_weight="1"
-              android:text="Idle"
-              android:textStyle="bold"
-              android:textColor="#E8D6B4" />
-
-            <Button
-              android:id="@+id/mapModeMiniBtn"
-              android:layout_width="64dp"
-              android:layout_height="30dp"
-              android:layout_marginEnd="6dp"
-              android:background="@drawable/nav_item_bg"
-              android:backgroundTint="@null"
-              android:text="MINI"
-              android:textAllCaps="true"
-              android:textColor="@color/nav_item_text"
-              android:textSize="10sp"
-              android:textStyle="bold" />
-
-            <Button
-              android:id="@+id/mapModeWorldBtn"
-              android:layout_width="72dp"
-              android:layout_height="30dp"
-              android:background="@drawable/nav_item_bg"
-              android:backgroundTint="@null"
-              android:text="WORLD"
-              android:textAllCaps="true"
-              android:textColor="@color/nav_item_text"
-              android:textSize="10sp"
-              android:textStyle="bold" />
-          </LinearLayout>
-
           <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:layout_marginTop="6dp"
             android:background="#111111">
 
             <com.turtlewow.pipboy.MapSurfaceView
@@ -211,50 +194,96 @@
               android:layout_width="match_parent"
               android:layout_height="match_parent"
               android:visibility="gone" />
+
+            <LinearLayout
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:layout_gravity="top|end"
+              android:layout_margin="8dp"
+              android:orientation="horizontal">
+
+              <Button
+                android:id="@+id/questPanelToggleBtn"
+                android:layout_width="64dp"
+                android:layout_height="28dp"
+                android:layout_marginEnd="5dp"
+                android:background="@drawable/nav_item_bg"
+                android:backgroundTint="@null"
+                android:text="QUEST"
+                android:textAllCaps="true"
+                android:textColor="@color/nav_item_text"
+                android:textSize="9sp"
+                android:textStyle="bold" />
+
+              <Button
+                android:id="@+id/mapModeMiniBtn"
+                android:layout_width="58dp"
+                android:layout_height="28dp"
+                android:layout_marginEnd="5dp"
+                android:background="@drawable/nav_item_bg"
+                android:backgroundTint="@null"
+                android:text="MINI"
+                android:textAllCaps="true"
+                android:textColor="@color/nav_item_text"
+                android:textSize="9sp"
+                android:textStyle="bold" />
+
+              <Button
+                android:id="@+id/mapModeWorldBtn"
+                android:layout_width="66dp"
+                android:layout_height="28dp"
+                android:background="@drawable/nav_item_bg"
+                android:backgroundTint="@null"
+                android:text="WORLD"
+                android:textAllCaps="true"
+                android:textColor="@color/nav_item_text"
+                android:textSize="9sp"
+                android:textStyle="bold" />
+            </LinearLayout>
           </FrameLayout>
         </LinearLayout>
 
         <LinearLayout
           android:id="@+id/questPanel"
-          android:layout_width="188dp"
+          android:layout_width="156dp"
           android:layout_height="match_parent"
           android:layout_marginStart="4dp"
           android:orientation="vertical"
-          android:padding="6dp"
+          android:padding="5dp"
           android:background="#2C2119">
 
           <TextView
             android:id="@+id/questPanelTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="QUEST TRACKER"
+            android:text="QUESTS"
             android:textColor="#D7BD8C"
             android:textStyle="bold"
-            android:textSize="12sp" />
+            android:textSize="11sp" />
 
           <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="6dp"
             android:orientation="horizontal">
 
             <Button
               android:id="@+id/questModeTrackerBtn"
               android:layout_width="0dp"
-              android:layout_height="32dp"
+              android:layout_height="28dp"
               android:layout_weight="1"
               android:background="@drawable/nav_item_bg"
               android:backgroundTint="@null"
               android:text="TRACKER"
               android:textAllCaps="false"
               android:textColor="@color/nav_item_text"
-              android:textSize="10sp"
+              android:textSize="9sp"
               android:textStyle="bold" />
 
             <Button
               android:id="@+id/questModeDetailBtn"
               android:layout_width="0dp"
-              android:layout_height="32dp"
+              android:layout_height="28dp"
               android:layout_weight="1"
               android:layout_marginStart="6dp"
               android:background="@drawable/nav_item_bg"
@@ -262,7 +291,7 @@
               android:text="DETAIL"
               android:textAllCaps="false"
               android:textColor="@color/nav_item_text"
-              android:textSize="10sp"
+              android:textSize="9sp"
               android:textStyle="bold" />
           </LinearLayout>
 
@@ -271,7 +300,7 @@
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="6dp"
             android:clipToPadding="false"
             android:paddingBottom="8dp"
             android:scrollbars="vertical" />
@@ -281,7 +310,7 @@
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="6dp"
             android:fillViewport="true"
             android:scrollbars="vertical"
             android:visibility="gone">
